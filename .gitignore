@@ -1,0 +1,5 @@
+# ignore papers floder
+dl_exam/cv/papers/
+dl_exam/nlp/papers/
+dl_exam/vla/papers/
+dl_exam/vlm/papers/

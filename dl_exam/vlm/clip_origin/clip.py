@@ -15,8 +15,8 @@ import torch
 from PIL import Image
 from torchvision.transforms import Compose, Resize, Normalize
 from torchvision.transforms import CenterCrop, ToTensor
-from .model import build_model
-from .tokenizer import Tokenizer as _Totokenizer
+from model import build_model
+from tokenizer import Tokenizer as _Totokenizer
 try:
     from torchvision.transforms import InterpolationMode
     BICUBIC = InterpolationMode.BICUBIC

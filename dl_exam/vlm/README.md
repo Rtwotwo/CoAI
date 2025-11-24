@@ -1,8 +1,8 @@
 # :rocket:Model Introduction:rocket:
 
-## :house:1.CLIP Architecture:house:
+## :house:1.CLIP_Origin Architecture:house:
 
-在构造CLIP模型时，代码通过分层模块化设计手动构建了各组件的依赖关系：首先定义基础构件如Bottleneck(用于ModifiedResNet)、AttentionPool2d(实现注意力池化)和ResidualAttentionBlock(Transformer基本单元)，再以此为基础分别搭建ModifiedResNet(适用于CNN主干)和VisionTransformer(适用于ViT主干)两种视觉编码器；同时构建文本侧的Transformer编码器，并将两者统一集成到CLIP主类中——CLIP根据vision\_layers的类型自动选择视觉主干，通过共享的embed\_dim对齐图像与文本特征空间，并利用可学习的logit\_scale调节相似度输出；整个依赖链自底向上，从底层卷积/注意力操作到高层多模态对齐逻辑，层层封装、参数协同，最终形成端到端的对比学习架构。具体的代码可以在[clip.py](dl_exam/vlm/clip/model.py)详细阅览，并且该代码参考学习的是[Openai-CLIP](https://github.com/openai/CLIP.git)仓库。
+When constructing the CLIP model, the code manually builds the dependency relationships of each component through a layered and modular design: first, basic components such as Bottleneck (for ModifiedResNet), AttentionPool2d (implementing attention pooling), and ResidualAttentionBlock (the basic unit of Transformer) are defined. Then, based on these, two types of visual encoders are constructed respectively: ModifiedResNet (suitable for the CNN backbone) and VisionTransformer (suitable for the ViT backbone). At the same time, a Transformer encoder for the text side is built, and both are uniformly integrated into the main CLIP class. CLIP automatically selects the visual backbone according to the type of vision\_layers, aligns the image and text feature spaces through the shared embed\_dim, and adjusts the similarity output using the learnable logit\_scale. The entire dependency chain is bottom-up, from underlying convolution/attention operations to high-level multimodal alignment logic, with layers of encapsulation and parameter collaboration, ultimately forming an end-to-end contrastive learning architecture. The specific code can be viewed in detail in [clip.py](dl_exam/vlm/clip_origin/model.py), and this code refers to and learns from the [CLIP](https://github.com/openai/CLIP.git) repository.
 
 ```mermaid
 classDiagram
@@ -70,4 +70,5 @@ classDiagram
     CLIP *-- "1" Transformer : text transformer
     CLIP *-- "1" LayerNorm : ln_final
 ```
+## :house:2.CLIP_Latest Architecture:house:
 

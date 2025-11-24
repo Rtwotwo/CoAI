@@ -20,18 +20,6 @@
 [submodule "dl_exam/vlm/clones/PointCLIP"]
 	path = dl_exam/vlm/clones/PointCLIP
 	url = https://github.com/dandelin/PointCLIP.git
-
-
-# For VLA
-[submodule "dl_exam/vla/clones/AutoVLA"]
-	path = dl_exam/vla/clones/AutoVLA
-	url = https://github.com/ucla-mobility/AutoVLA.git
-[submodule "dl_exam/vla/clones/GraspVLA"]
-	path = dl_exam/vla/clones/GraspVLA
-	url = https://github.com/PKU-EPIC/GraspVLA.git
-[submodule "dl_exam/vla/clones/SimpleVLA-RL"]
-	path = dl_exam/vla/clones/SimpleVLA-RL
-	url = https://github.com/PRIME-RL/SimpleVLA-RL
 [submodule "dl_exam/vlm/clones/VLM-R1"]
 	path = dl_exam/vlm/clones/VLM-R1
 	url = https://github.com/om-ai-lab/VLM-R1.git
@@ -41,3 +29,15 @@
 [submodule "dl_exam/vlm/clones/LLaVA-RLHF"]
 	path = dl_exam/vlm/clones/LLaVA-RLHF
 	url = https://github.com/llava-rlhf/LLaVA-RLHF.git
+
+
+# For VLA
+[submodule "dl_exam/vla/clones/GraspVLA"]
+	path = dl_exam/vla/clones/GraspVLA
+	url = https://github.com/PKU-EPIC/GraspVLA.git
+[submodule "dl_exam/vla/clones/SimpleVLA-RL"]
+	path = dl_exam/vla/clones/SimpleVLA-RL
+	url = https://github.com/PRIME-RL/SimpleVLA-RL
+[submodule "dl_exam/vla/clones/RoboticsDiffusionTransformer"]
+	path = dl_exam/vla/clones/RoboticsDiffusionTransformer
+	url = https://github.com/thu-ml/RoboticsDiffusionTransformer.git
