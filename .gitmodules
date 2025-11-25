@@ -2,6 +2,12 @@
 [submodule "dl_exam/cv/clones/stablediffusion"]
 	path = dl_exam/cv/clones/stablediffusion
 	url = https://github.com/Stability-AI/stablediffusion.git
+[submodule "dl_exam/cv/clones/MiaoBi"]
+	path = dl_exam/cv/clones/MiaoBi
+	url = https://github.com/ShineChen1024/MiaoBi.git
+[submodule "dl_exam/cv/clones/stable-diffusion-webui"]
+	path = dl_exam/cv/clones/stable-diffusion-webui
+	url = https://github.com/AUTOMATIC1111/stable-diffusion-webui
 
 # For NLP
 
@@ -50,9 +56,3 @@
 	path = dl_exam/vla/clones/RoboticsDiffusionTransformer
 	url = https://github.com/thu-ml/RoboticsDiffusionTransformer.git
 
-[submodule "dl_exam/cv/clones/MiaoBi"]
-	path = dl_exam/cv/clones/MiaoBi
-	url = https://github.com/ShineChen1024/MiaoBi.git
-[submodule "dl_exam/cv/clones/stable-diffusion-webui"]
-	path = dl_exam/cv/clones/stable-diffusion-webui
-	url = https://github.com/AUTOMATIC1111/stable-diffusion-webui
