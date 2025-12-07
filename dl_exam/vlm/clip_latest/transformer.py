@@ -142,6 +142,25 @@ class PatchDropout(nn.Module):
         return x
 
 
+"""
+class Dropout(nn.Module):
+    def __init__(self, p:float=0.1,
+                 training:bool=True
+                 )->None:
+        super().__init__()
+        assert p<0 or p>=1, f'Dropout的p值应该在[0, 1)之间'
+        self.p = p
+        self.training = training
+    def forward(self, x:torch.Tensor)->torch.Tensor:
+        if self.training:
+            # keep_p = 1 - slef.p
+            # mask = (torch.rand_like(x) < keep_p).float() / keep_p
+            # return x * mask
+            mask = torch.rand_like(x) > self.p
+            x = (x * mask.float()) / (1 - self.p)
+            return x
+        return x
+"""
 class Attention(nn.Module):
     """灵活扩展的多头注意力Multi-Head Attention的PyTorch实现,
     整合了多个主流注意力改进技术核心用于Transformer类模型的特征交互"""
@@ -198,12 +217,135 @@ class Attention(nn.Module):
         else: self.ln_inner = nn.Identity()
         self.out_proj = nn.Linear(dim, dim)
         self.out_drop = nn.Dropout(proj_drop)
-    def forward(self, x:torch.Tensor)->torch.Tensor:
+    def forward(self, x:torch.Tensor, 
+                attn_mask:Optional[torch.Tensor]
+                )->torch.Tensor:
         N, L, C = x.shape
         q, k, v = F.linear(x, self.in_proj_weight, self.in_proj_bias).chunk(3, dim=-1)
         q = q.view(N, L, self.num_heads, -1).transpose(1, 2)
         k = k.view(N, L, self.num_heads, -1).transpose(1, 2)
         v = v.view(N, L, self.num_heads, -1).transpose(1, 2)
-        
-        
-        
+
+        # 注意力掩码,在计算注意力时只关注有效位置,忽略无效位置
+        if attn_mask is not None:
+            if attn_mask.ndim == 3:
+                # 此模块适用于(L，L)或(N，num_heads，L，L)掩码
+                attn_mask = attn_mask.reshape(N, self.num_heads, L, L)
+            elif attn_mask == torch.bool:
+                new_attn_mask = torch.zeros_like(attn_mask, dtype=q.dtype)
+                new_attn_mask = new_attn_mask.masked_fill_(attn_mask, float("-inf"))
+                attn_mask = new_attn_mask
+            else: attn_mask = attn_mask.to(dtype=q.dtype)
+
+        # 两种不同的注意力机制计算逻辑
+        if self.scaled_cosine is not None:
+            # 缩放的余弦相似度注意力
+            attn = torch.bmm( # 批量计算归一化的注意力矩阵
+                F.normalize(q, dim=-1),
+                F.normalize(k, dim=-1).transpose(1, 2))
+            # 可学习的参数,用于控制注意力分数的缩放
+            logit_scale = torch.clamp(self.logit_scale, max=self.logit_scale_max).exp()
+            attn = attn * logit_scale
+            if attn_mask is not None:
+                attn = attn + attn_mask
+            attn = attn.softmax(dim=-1)
+            attn = self.attn_drop(attn)
+            x = torch.bmm(attn, v)
+        else:
+            # 不使用logit_scale的注意力计算
+            q = self.ln_q(q)
+            k = self.ln_k(k)
+            if self.use_fsdpa:
+                x = F.scaled_dot_product_attention(
+                    q, k, v, attn_mask=attn_mask,
+                    dropout_p = self.attn_drop.p if self.training else 0.)
+            else:
+                q = q * self.scale
+                attn = torch.bmm(q, k.transpose(-1, -2))
+                if attn_mask is not None: attn = attn + attn_mask
+                attn = attn.softmax(dim=-1)
+                attn = self.attn_drop(attn)
+                x = torch.bmm(attn, v)
+
+        # [N, num_heads, L, head_dim]->[N, L, C]
+        # 多头注意力MHA模块的输出处理阶段
+        if self.head_scale: x = x * self.head_scale
+        x = x.transpose(1, 2).reshape(N, L, C)
+        x = self.ln_inner(x)
+        self.out_proj(x)
+        self.out_drop(x)
+        return x
+
+
+class AttentionalPooler(nn.Module):
+    """注意力池化层,用于将变长序列转换为固定长度的表示
+    通过注意力机制动态聚合序列信息,能更好地捕捉序列中的关键内容"""
+    def __init__(self, 
+                 d_model: int,
+                 context_dim: int,
+                 n_head: int=8,
+                 n_queries: int=256,
+                 norm_layer: Callable=LayerNorm
+                 )->None:
+        super().__init__()
+        self.query = nn.Parameter(torch.randn(n_queries, d_model))
+        self.attn = nn.MultiheadAttention(d_model, n_head, kdim=context_dim, 
+                                          vdim=context_dim, batch_first=True)
+        self.ln_q = norm_layer(d_model)
+        self.ln_k = norm_layer(context_dim)
+    def forward(self, x: torch.Tensor)->torch.Tensor:
+        N = x.shape[0]
+        x = self.ln_k(x)
+        q = self.ln_q(self.query)
+        out = self.attn(q.unsqueeze(0).expand(N, -1, -1), x, x, need_weights=False)[0]
+        return out
+
+
+class ResidualAttentionBlock(nn.Module):
+    def __init__(self, 
+                 d_model: int,
+                 n_head: int,
+                 mlp_ratio:float=4.0,
+                 is_init_value:float=None,
+                 act_layer:Callable=nn.GELU,
+                 norm_layer:Callable=LayerNorm,
+                 is_cross_attention:bool=False,
+                 batch_first:bool=True
+                 )->None:
+        super().__init__()
+        # 交叉注意力层实现
+        self.ln_1 = norm_layer(d_model)
+        self.attn = nn.MultiheadAttention(d_model, n_head, batch_first=batch_first)
+        self.ls_1 = LayerScale(d_model, is_init_value) if is_init_value is not None else nn.Identity()
+        if is_cross_attention: self.ln_1_kv = norm_layer(d_model)
+        # MLP层实现
+        self.ln_2 = norm_layer(d_model)
+        mlp_width = int(d_model * mlp_ratio)
+        self.mlp = nn.Sequential(OrderedDict([
+            ('c_fc', nn.Linear(d_model, mlp_width)),
+            ('gelu', act_layer()),
+            ('c_proj', nn.Linear(mlp_width, d_model)),]))
+        self.ls_2 = LayerScale(d_model, is_init_value) if is_init_value is not None else nn.Identity()
+    def get_weight_dtype(self)->torch.dtype:
+        if hasattr(self.mlp.c_fc, 'int8_original_dtype'):
+            return self.mlp.c_fc.int8_original_dtype
+        return self.mlp.c_fc.weight.dtype
+    def attention(self, q_x:torch.Tensor,
+                  k_x: Optional[torch.Tensor]=None,
+                  v_x: Optional[torch.Tensor]=None,
+                  attn_mask: Optional[torch.Tensor]=None,
+                  )->torch.Tensor:
+        k_x = k_x if k_x is not None else q_x
+        v_x = v_x if v_x is not None else q_x
+        attn_mask = attn_mask.to(q_x.dtype) if attn_mask is not None else None
+        return self.attn(q_x, k_x, v_x, need_weights=False, attn_mask=attn_mask)[0]
+    def forward(self, q_x: torch.Tensor,
+                k_x: Optional[torch.Tensor]=None,
+                v_x: Optional[torch.Tensor]=None,
+                attn_mask: Optional[torch.Tensor]=None,
+                )->torch.Tensor:
+        K_x = self.ln_1_kv(k_x) if hasattr(self, 'ln_1_kv') and k_x is not None else None
+        v_x = self.ln_1_kv(v_x) if hasattr(self, 'ln_1_kv') and v_x is not None else None
+        x = q_x + self.ls_1(self.attention(q_x=self.ln_1(q_x), k_x=k_x, v_x=v_x, attn_mask=attn_mask))
+        x = x + self.ls_2(self.mlp(self.ln_2(x)))
+        return x
