@@ -1,5 +1,13 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# All rights reserved.
+
+# This source code is licensed under the license found in the
+# LICENSE file in the root directory of this source tree.
+# --------------------------------------------------------
+# Position embedding utils
+# --------------------------------------------------------
 """
-Author: Redal
+Modified By: Redal
 Date: 2025-12-03
 Todo: 实现一个高度可配置,模块化的CLIP(Contrastive Language-Image Pretraining)模型,
       支持多种视觉主干(如Vision Transformer,Modified ResNet,timm模型)和文本编码器

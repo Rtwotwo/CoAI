@@ -13,8 +13,8 @@ Todo: 实现和处理2D正弦-余弦位置编码(sine-cosine positional embeddin
       并支持在不同分辨率之间插值位置编码,以适应图像尺寸变化.
 Homepage: https://github.com/Rtwotwo/Code-Exam.git
 """
-import numpy as np
 import torch
+import numpy as np
 
 
 # --------------------------------------------------------
@@ -89,4 +89,17 @@ def interpolate_pos_embed(model, checkpoint_model):
         embedding_size = pos_embed_checkpoint.shape[-1]
         num_patches = model.patch_embed.num_patches
         num_extra_tokens = model.pos_embed.shape[-2] - num_patches
-        
+        # 计算原始与新型图像的边长
+        orig_size = int((pos_embed_checkpoint.shape[-2] - num_extra_tokens)**0.5)
+        new_size = int(num_patches**0.5)
+        if orig_size != new_size:
+            print(f'位置嵌入：从{orig_size}x{orig_size}到{new_size}x{new_size}!')
+            extra_tokens = pos_embed_checkpoint[:, :num_extra_tokens]
+            pos_tokens = pos_embed_checkpoint[:, num_extra_tokens:]
+            # 位置嵌入插值:双三次插值(bicubic)
+            pos_tokens = pos_tokens.reshape(-1, orig_size, orig_size, embedding_size).permute(0, 3, 1, 2)
+            pos_tokens = torch.nn.functional.interpolate(
+                pos_tokens, size=(new_size, new_size), mode='bicubic', align_corners=False)
+            pos_tokens = pos_tokens.permute(0, 2, 3, 1).flatten(1, 2)
+            new_pos_embed = torch.cat((extra_tokens, pos_tokens), dim=1)
+            checkpoint_model['pos_embed'] = new_pos_embed

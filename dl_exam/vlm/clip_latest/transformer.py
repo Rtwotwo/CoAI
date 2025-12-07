@@ -1,5 +1,13 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# All rights reserved.
+
+# This source code is licensed under the license found in the
+# LICENSE file in the root directory of this source tree.
+# --------------------------------------------------------
+# Position embedding utils
+# --------------------------------------------------------
 """
-Author: Redal
+Modified By: Redal
 Date: 2025-12-03
 Todo: 
 Homepage: https://github.com/Rtwotwo/Code-Exam.git
@@ -351,3 +359,60 @@ class ResidualAttentionBlock(nn.Module):
         return x
     
 
+class CustomResidualAttentionBlock(nn.Module):
+    def __init__(self,
+                 d_model:int,
+                 n_head:int,
+                 mlp_ratio:float=4.0,
+                 is_init_value:float=None,
+                 act_layer: Type[nn.Module]=nn.GELU,
+                 norm_layer: Type[nn.Module]=LayerNorm,
+                 qk_norm: bool=False,
+                 scale_cosine_attn:bool=False,
+                 scale_heads:bool=False,
+                 scale_attn_inner:bool=False,
+                 scale_attn: bool=False,
+                 scale_fc: bool=False,
+                 batch_first:bool=False,
+                 )->None:
+        super().__init__()
+        assert batch_first, f'batch_first必须为True,当前的batch_first:{batch_first}'
+        self.ln_1 = norm_layer(d_model)
+        self.attn = Attention(d_model,
+                              n_head,
+                              qk_norm=qk_norm,
+                              scale_cosine=scale_cosine_attn,
+                              scale_heads=scale_heads,
+                              inner_norm=scale_attn_inner,
+                              norm_layer=norm_layer)
+        self.ln_attn = norm_layer(d_model) if scale_attn else nn.Identity()
+        self.ls_1 = LayerScale(d_model, is_init_value) if is_init_value is not None else None
+
+        self.ln_2 = norm_layer(d_model)
+        mlp_width = int(d_model * mlp_ratio)
+        self.mlp = nn.Sequential(OrderedDict([
+            ('c_fc', nn.Linear(d_model, mlp_width)),
+            ('gelu', act_layer()),
+            # 来自 NormFormer/Foundation Transformers
+            ('ln', norm_layer(mlp_width) if scale_fc else nn.Identity()),
+            ('c_proj', nn.Linear(mlp_width, d_model)),]))
+        self.ls_2 = LayerScale(d_model, is_init_value) if is_init_value is not None else None
+    def get_weight_type(self,)->torch.dtype:
+        if hasattr(self.mlp.c_fc, 'int8_original_dtype'):
+            return self.mlp.c_fc.weight.int8_original_dtype
+        return self.mlp.c_fc.weight.dtype
+    def forward(self, x:torch.Tensor, 
+                attn_mask:Optional[torch.Tensor]=None
+                )->torch.Tensor:
+        x = x + self.ls_1(self.ln_attn(self.attn(self.ln_1(x), attn_mask=attn_mask)))
+        x = x + self.ls_2(self.mlp(self.ln_2(x)))
+        return x
+
+
+class CustomTransformer(nn.Module):
+    def __init__(self,
+                 d_model:int,
+                 n_head:int,
+                 )->None:
+        super().__init__()
+        
