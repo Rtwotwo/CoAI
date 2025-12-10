@@ -1,12 +1,12 @@
-# For CV 
-[submodule "dl_exam/cv/clones/stablediffusion"]
-	path = dl_exam/cv/clones/stablediffusion
+# For AIGC
+[submodule "dl_exam/aigc/clones/stablediffusion"]
+	path = dl_exam/aigc/clones/stablediffusion
 	url = https://github.com/Stability-AI/stablediffusion.git
-[submodule "dl_exam/cv/clones/MiaoBi"]
-	path = dl_exam/cv/clones/MiaoBi
+[submodule "dl_exam/aigc/clones/MiaoBi"]
+	path = dl_exam/aigc/clones/MiaoBi
 	url = https://github.com/ShineChen1024/MiaoBi.git
-[submodule "dl_exam/cv/clones/stable-diffusion-webui"]
-	path = dl_exam/cv/clones/stable-diffusion-webui
+[submodule "dl_exam/aigc/clones/stable-diffusion-webui"]
+	path = dl_exam/aigc/clones/stable-diffusion-webui
 	url = https://github.com/AUTOMATIC1111/stable-diffusion-webui
 
 # For NLP
