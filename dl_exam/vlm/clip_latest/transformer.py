@@ -411,8 +411,23 @@ class CustomResidualAttentionBlock(nn.Module):
 
 class CustomTransformer(nn.Module):
     def __init__(self,
-                 d_model:int,
-                 n_head:int,
+                 width:int,
+                 layers:int,
+                 heads:int,
+                 mlp_ratio:float=4.0,
+                 is_init_value:float=None,
+                 act_layer: Type[nn.Module]=nn.GELU,
+                 norm_layer: Type[nn.Module]=LayerNorm,
+                 batch_first:bool=True,
+                 block_types:Union[str, List[str]]='CustomResidualAttentionBlock',
                  )->None:
         super().__init__()
+        self.width = width
+        self.layers = layers
+        # batch_first优先则transfromer的形状为[N, L, D]
+        self.batch_first = batch_first
+        self.grad_checkpointing = False
+        
+
+
         
