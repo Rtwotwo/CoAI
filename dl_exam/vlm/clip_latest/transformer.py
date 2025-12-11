@@ -428,6 +428,4 @@ class CustomTransformer(nn.Module):
         self.batch_first = batch_first
         self.grad_checkpointing = False
         
-
-
         

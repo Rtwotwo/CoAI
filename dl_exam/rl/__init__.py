@@ -4,6 +4,3 @@ Date: 2025-10-11
 Todo: __init__.py
 Homepage: https://github.com/Rtwotwo/Code-Exam.git
 """
-import os
-import sys
-import pathlib

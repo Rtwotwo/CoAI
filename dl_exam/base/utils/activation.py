@@ -2,7 +2,7 @@
 Author: Redal
 Date: 2025-12-08
 Todo: 完成激活函数的底层实现,并添加到activation_layers中,
-      以供后续模型架构的model调用.
+      以供后续模型架构的model调用. s    W`1
 Homepage: https://github.com/Rtwotwo/Code-Exam.git
 """
 import torch 
@@ -40,6 +40,33 @@ class Sigmoid(nn.Module):
                         torch.exp(x) / (1.0 + torch.exp(x)))
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return F.sigmoid(x) if self.use_native else self.sigmoid_(x)
+    
+
+class LogSigmoid(nn.Module):
+    """计算公式: logsigmoid(x) = log(1 / (1 + exp(-x)))
+    use_native (bool): 是否使用 PyTorch 原生实现"""
+    def __init__(self, use_native: bool = True):
+        super().__init__()
+        self.use_native = use_native
+    def logsigmoid_(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.log(torch.exp(x) / (1.0 + torch.exp(x)))
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return F.logsigmoid(x) if self.use_native else self.logsigmoid_(x)
+    
+
+class HardSigmoid(nn.Module):
+    """计算公式: HardSigmoid(x) = 0.2*clamp(x, -2.5, 2.5) + 0.5
+    use_native: 是否使用pytorch原生实现"""
+    def __init__(self, use_native: bool=True):
+        super().__init__()
+        self.use_native = use_native
+    def hard_sigmoid_(self, x: torch.Tensor) -> torch.Tensor:
+        # 两面两者完全等价计算公式
+        # x = torch.clamp(torch.clamp(x, min=-2.5, max=2.5).mul(0.2).add(0.5), min=0.0, max=1.0)
+        x = torch.clamp(x + 3, 0, 6) / 6.0
+        return x
+    def forward(self, x: torch.Tensor)->torch.Tensor:
+        return F.hardsigmoid(x) if self.use_native else self.hard_sigmoid_(x)
 
 
 class ReLU(nn.Module):
@@ -111,4 +138,32 @@ class QuickGELU(nn.Module):
         if self.approximate: return self.quickgelu_(x)
         else: return F.gelu(x) if self.use_native else self.gelu(x)
 
+
+class SiLU(nn.Module):
+    """计算公式: SiLU(x) = x * sigmoid(x)
+    use_native (bool): 是否使用PyTorch原生实现"""
+    def __init__(self, use_native: bool = True)->None:
+        super().__init__()
+        self.use_native = use_native
+    def silu_(self, x: torch.Tensor) -> torch.Tensor:
+        return x * (1.0 / (1.0 + torch.exp(-x)))
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return F.silu(x) if self.use_native else self.silu_(x)
+
+
+class Softmax(nn.Module):
+    """计算公式: softmax(xi) = exp(xi) / sum(exp(xj))
+    dim (int): 归一化维度,默认最后一个维度
+    use_native (bool): 是否使用PyTorch原生实现"""
+    def __init__(self, dim: int=-1, use_native: bool=True)->None:
+        super().__init__()
+        self.dim = dim
+        self.use_native = use_native
+    def softmax_(self, x:torch.Tensor)->torch.Tensor:
+        exp_x = torch.exp(x - torch.max(x, dim=self.dim, keepdim=True).values)
+        sum_exp_x = torch.sum(exp_x, dim=self.dim, keepdim=True)
+        return exp_x / sum_exp_x
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return F.softmax(x, dim=self.dim) if self.use_native else self.softmax_(x)
+    
 
