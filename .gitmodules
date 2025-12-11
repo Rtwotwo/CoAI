@@ -60,3 +60,9 @@
 	path = dl_exam/vla/clones/RoboticsDiffusionTransformer
 	url = https://github.com/thu-ml/RoboticsDiffusionTransformer.git
 
+[submodule "dl_exam/rl/clones/baselines"]
+	path = dl_exam/rl/clones/baselines
+	url = https://github.com/openai/baselines.git
+[submodule "dl_exam/rl/clones/cleanrl"]
+	path = dl_exam/rl/clones/cleanrl
+	url = https://github.com/vwxyzjn/cleanrl.git
