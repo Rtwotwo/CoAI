@@ -2,7 +2,7 @@
 Author: Redal
 Date: 2025-12-08
 Todo: 完成激活函数的底层实现,并添加到activation_layers中,
-      以供后续模型架构的model调用. s    W`1
+      以供后续模型架构的model调用
 Homepage: https://github.com/Rtwotwo/Code-Exam.git
 """
 import torch 

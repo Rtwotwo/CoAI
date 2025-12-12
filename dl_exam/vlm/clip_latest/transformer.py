@@ -427,5 +427,93 @@ class CustomTransformer(nn.Module):
         # batch_first优先则transfromer的形状为[N, L, D]
         self.batch_first = batch_first
         self.grad_checkpointing = False
-        
-        
+        if isinstance(block_types, str):
+            block_types = [block_types] * layers
+        assert len(block_types) == layers, f"block_types的长度{len(block_types)}必须等于layers的长度{layers}"
+        def _create_block(bt: str)->CustomResidualAttentionBlock:
+            """根据给定的block类型创建对应的块实例"""
+            if bt == "CustomResidualAttentionBlock":
+                return CustomResidualAttentionBlock(
+                    d_model=width,
+                    n_head=heads,
+                    mlp_ratio=mlp_ratio,
+                    is_init_value=is_init_value,
+                    act_layer=act_layer,
+                    norm_layer=norm_layer,
+                    batch_first=batch_first)
+            else:
+                assert False, f'block_type: {bt}不被支持!'
+        # 创建blocks
+        self.resblocks = nn.ModuleList([_create_block(bt) for bt in block_types])
+    def get_cast_dtype(self,)->torch.dtype:
+        """获取Transformer中残差块的权重数据类型"""
+        return self.resblocks[0].get_weight_type()
+    def forward_intermediates(self, x:torch.Tensor,
+                              attn_mask: Optional[torch.Tensor]=None,
+                              indices: Optional[Union[int, List[int]]]=None,
+                              stop_early: bool= False)_->torch.Tensor:
+        """对输入张量依次通过多个残差块，并根据指定索引收集中间层输出
+        最终返回输出结果和所有指定的中间层特征"""
+        # 计算需要收集中间结果的索引和最大索引
+        take_indices, max_index = feature_take_indices(len(self.resblocks), indices, )
+        # 把输入张量从 (N, L, D) 转换为 (L, N, D)，并保证内存连续
+        if not self.batch_first:
+            x = x.transpose(0, 1).contiguous()
+        intermediates = []
+        if torch.jit.is_scripting() or not stop_early:
+            blocks = self.resblocksblocks
+        else: blocks = self.blocks[:max_index +1]
+        for i, blk in enumerate(self.resblocks):
+            if self.grad_checkpointing and not torch.jit.is_scripting():
+                x = checkpoint(blk, x, attn_mask)
+            else: x = blk(x, attn_mask)
+            # 如果当前块的索引在需要收集的索引列表中
+            if i in take_indices:
+                intermediates.append(x.transpose(0, 1) if self.batch_first else x)
+        # 形状[L, N, D] -> [N, L, D]
+        if not self.batch_first:
+            x = x.transpose(0, 1) 
+        return x, intermediates
+    def prune_intermediate_layers(self, indices:Union[int, List[int]]=1)->None:
+        """根据指定的索引裁剪残差块,只保留需要的部分,并返回需要收集的中间层索引"""
+        take_indices, max_index = feature_take_indices(len(self.resblocks), indices)
+        self.resblocks = self.resblocks[:max_index +1]
+        return take_indices
+    def forward(self, x: torch.Tensor, 
+                attn_mask: Optional[torch.Tensor]=None
+                )->torch.Tensor:
+        # 改变形状[N, L,, D] -> [L, N, D]
+        if not self.batch_first:
+            x = x.transpose(0, 1).contiguous()
+        for r in self.resblocks:
+            # 
+            if self.grad_checkpointing and not torch.jit.is_scripting():
+                # 如果启用了梯度检查点且未在 TorchScript 模式下，使用 torch.utils.checkpoint对残差块r进行前向计算
+                # TODO: handle kwargs https://github.com/pytorch/pytorch/issues/79887#issuecomment-1161758372
+                x = checkpoint(r, x, None, None, attn_mask, use_reentrant=False)
+            else: x = r(x, attn_mask=attn_mask)
+        # 改变形状[L, N, D] -> [N, L,
+        if not self.batch_first:
+            x = x.transpose(0, 1).contiguous()
+        return x
+
+
+class Transformer(nn.Module):
+    def __init__(self, 
+                 width:int,
+                 layers:int,
+                 heads: int,
+                 mlp_ratio:float=4.0,
+                 attention_pool: bool=False,
+                 attention_pool_queries: int=256,
+                 attention_pool_head: int=8,
+                 output_dim: int=512,
+                 patch_dropout: float=0.,
+                 is_init_values:float=None,
+                 act_layer: Callable=nn.GELU,
+                 norm_layer: Callable=LayerNorm,
+                 batch_first: bool=False,
+                 )->None:
+        super().__init__()
+        self.width = width
+        self.layers = layers
