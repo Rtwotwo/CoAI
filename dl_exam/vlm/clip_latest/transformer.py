@@ -314,7 +314,7 @@ class ResidualAttentionBlock(nn.Module):
                  d_model: int,
                  n_head: int,
                  mlp_ratio:float=4.0,
-                 is_init_value:float=None,
+                 ls_init_value:float=None,
                  act_layer:Callable=nn.GELU,
                  norm_layer:Callable=LayerNorm,
                  is_cross_attention:bool=False,
@@ -324,7 +324,7 @@ class ResidualAttentionBlock(nn.Module):
         # 交叉注意力层实现
         self.ln_1 = norm_layer(d_model)
         self.attn = nn.MultiheadAttention(d_model, n_head, batch_first=batch_first)
-        self.ls_1 = LayerScale(d_model, is_init_value) if is_init_value is not None else nn.Identity()
+        self.ls_1 = LayerScale(d_model, ls_init_value) if ls_init_value is not None else nn.Identity()
         if is_cross_attention: self.ln_1_kv = norm_layer(d_model)
         # MLP层实现
         self.ln_2 = norm_layer(d_model)
@@ -333,8 +333,9 @@ class ResidualAttentionBlock(nn.Module):
             ('c_fc', nn.Linear(d_model, mlp_width)),
             ('gelu', act_layer()),
             ('c_proj', nn.Linear(mlp_width, d_model)),]))
-        self.ls_2 = LayerScale(d_model, is_init_value) if is_init_value is not None else nn.Identity()
+        self.ls_2 = LayerScale(d_model, ls_init_value) if ls_init_value is not None else nn.Identity()
     def get_weight_dtype(self)->torch.dtype:
+        """获取模型中MLP层的全连接层c_fc的权重数据类型"""
         if hasattr(self.mlp.c_fc, 'int8_original_dtype'):
             return self.mlp.c_fc.int8_original_dtype
         return self.mlp.c_fc.weight.dtype
@@ -352,7 +353,7 @@ class ResidualAttentionBlock(nn.Module):
                 v_x: Optional[torch.Tensor]=None,
                 attn_mask: Optional[torch.Tensor]=None,
                 )->torch.Tensor:
-        K_x = self.ln_1_kv(k_x) if hasattr(self, 'ln_1_kv') and k_x is not None else None
+        k_x = self.ln_1_kv(k_x) if hasattr(self, 'ln_1_kv') and k_x is not None else None
         v_x = self.ln_1_kv(v_x) if hasattr(self, 'ln_1_kv') and v_x is not None else None
         x = q_x + self.ls_1(self.attention(q_x=self.ln_1(q_x), k_x=k_x, v_x=v_x, attn_mask=attn_mask))
         x = x + self.ls_2(self.mlp(self.ln_2(x)))
@@ -364,7 +365,7 @@ class CustomResidualAttentionBlock(nn.Module):
                  d_model:int,
                  n_head:int,
                  mlp_ratio:float=4.0,
-                 is_init_value:float=None,
+                 ls_init_value:float=None,
                  act_layer: Type[nn.Module]=nn.GELU,
                  norm_layer: Type[nn.Module]=LayerNorm,
                  qk_norm: bool=False,
@@ -386,7 +387,7 @@ class CustomResidualAttentionBlock(nn.Module):
                               inner_norm=scale_attn_inner,
                               norm_layer=norm_layer)
         self.ln_attn = norm_layer(d_model) if scale_attn else nn.Identity()
-        self.ls_1 = LayerScale(d_model, is_init_value) if is_init_value is not None else None
+        self.ls_1 = LayerScale(d_model, ls_init_value) if ls_init_value is not None else None
 
         self.ln_2 = norm_layer(d_model)
         mlp_width = int(d_model * mlp_ratio)
@@ -396,7 +397,7 @@ class CustomResidualAttentionBlock(nn.Module):
             # 来自 NormFormer/Foundation Transformers
             ('ln', norm_layer(mlp_width) if scale_fc else nn.Identity()),
             ('c_proj', nn.Linear(mlp_width, d_model)),]))
-        self.ls_2 = LayerScale(d_model, is_init_value) if is_init_value is not None else None
+        self.ls_2 = LayerScale(d_model, ls_init_value) if ls_init_value is not None else None
     def get_weight_type(self,)->torch.dtype:
         if hasattr(self.mlp.c_fc, 'int8_original_dtype'):
             return self.mlp.c_fc.weight.int8_original_dtype
@@ -415,7 +416,7 @@ class CustomTransformer(nn.Module):
                  layers:int,
                  heads:int,
                  mlp_ratio:float=4.0,
-                 is_init_value:float=None,
+                 ls_init_value:float=None,
                  act_layer: Type[nn.Module]=nn.GELU,
                  norm_layer: Type[nn.Module]=LayerNorm,
                  batch_first:bool=True,
@@ -437,7 +438,7 @@ class CustomTransformer(nn.Module):
                     d_model=width,
                     n_head=heads,
                     mlp_ratio=mlp_ratio,
-                    is_init_value=is_init_value,
+                    ls_init_value=ls_init_value,
                     act_layer=act_layer,
                     norm_layer=norm_layer,
                     batch_first=batch_first)
@@ -451,7 +452,7 @@ class CustomTransformer(nn.Module):
     def forward_intermediates(self, x:torch.Tensor,
                               attn_mask: Optional[torch.Tensor]=None,
                               indices: Optional[Union[int, List[int]]]=None,
-                              stop_early: bool= False)_->torch.Tensor:
+                              stop_early: bool= False)->torch.Tensor:
         """对输入张量依次通过多个残差块，并根据指定索引收集中间层输出
         最终返回输出结果和所有指定的中间层特征"""
         # 计算需要收集中间结果的索引和最大索引
@@ -504,16 +505,144 @@ class Transformer(nn.Module):
                  layers:int,
                  heads: int,
                  mlp_ratio:float=4.0,
-                 attention_pool: bool=False,
-                 attention_pool_queries: int=256,
-                 attention_pool_head: int=8,
-                 output_dim: int=512,
-                 patch_dropout: float=0.,
-                 is_init_values:float=None,
-                 act_layer: Callable=nn.GELU,
-                 norm_layer: Callable=LayerNorm,
+                 ls_init_value:float=None,
+                 act_layer: Type[nn.Module]=nn.GELU,
+                 norm_layer: Type[nn.Module]=LayerNorm,
                  batch_first: bool=False,
+                 block_type: Optional[str]=None,
+                 qk_norm: bool=False,
+                 scaled_cosine_attn: bool=False,
+                 scale_heads: bool=False,
+                 scale_attn_inner: bool=False,
+                 scale_attn: bool=False,
+                 scale_fc: bool=False,
                  )->None:
         super().__init__()
         self.width = width
         self.layers = layers
+        self.batch_first = batch_first
+        self.grad_checkpointing = False
+        # 如果启用了任何自定义功能,则自动选择自定义块
+        if block_type is None:
+            if any([qk_norm, scaled_cosine_attn, scale_heads, 
+                    scale_attn_inner, scale_attn, scale_fc]):
+                block_type = 'custom'
+            else: block_type = 'default'
+        if block_type == 'custom':
+            self.resblocks = nn.ModuleList([
+                CustomResidualAttentionBlock(
+                    d_model = width,
+                    n_head = heads,
+                    mlp_ratio = mlp_ratio,
+                    ls_init_value=ls_init_value,
+                    act_layer=act_layer,
+                    norm_layer=norm_layer,
+                    qk_norm = qk_norm,
+                    scale_cosine_attn=scaled_cosine_attn,
+                    scale_heads = scale_heads,
+                    scale_attn_inner = scale_attn_inner,
+                    scale_attn = scale_attn,
+                    scale_fc = scale_fc,
+                    batch_first=batch_first,)
+                for _ in range(layers)])
+        else:
+            self.resblocks = nn.ModuleList([
+                ResidualAttentionBlock(
+                    d_model = width,
+                    n_head = heads,
+                    mlp_ratio=mlp_ratio,
+                    ls_init_value=ls_init_value,
+                    act_layer=act_layer,
+                    norm_layer=norm_layer,
+                    batch_first=batch_first,)
+                for _ in range(layers)])
+    def get_cast_dtype(self,)->torch.dtype:
+        """获取模型中MLP层的全连接层c_fc的权重数据类型"""
+        return self.resblocks[0].get_weight_dtype()
+    def forward_intermediates(self, x: torch.Tensor,
+                              attn_mask: Optional[torch.Tensor]=None,
+                              indices: Optional[Union[int, List[int]]]=None,
+                              stop_early: bool=False):
+        """支持指定任意层提取中间特征,适配不同的下游任务需求"""
+        take_indices, max_index = feature_take_indices(len(self.resblocks), indices)
+        if not self.batch_first:
+            # 将形状[N, L, D]转换为[L, N, D]
+            x = x.transpose(0, 1).contiguous()
+        intermediates = []
+        if torch.jit.is_scriping or not self.grad_checkpointing:
+            blocks = self.resblocks
+        else: blocks = self.resblocks[:max_index + 1]
+        # 遍历残差块执行前向计算,并提取中间特征
+        for i, blk in enumerate(blocks):
+            if self.grad_checkpointing and not torch.jit.is_scripting():
+                x = checkpoint(blk, x, None, None, attn_mask, use_reentrant=False)
+            else: 
+                x = blk(x, attn_mask)
+            # 若当前层索引在take_indices中,提取并保存特征
+            if i in take_indices: intermediates.append(x.transpose(0, 1) if not self.batch_first else x)
+        if not self.batch_first:
+            x = x.transpose(0, 1)
+        return x, intermediates
+    def prune_intermediate_layers(self, indices:Union[int, List[int]]=1):
+        """修剪指定中间结果不需要的层"""
+        take_indices, max_index = feature_take_indices(len(self.resblocks), indices)
+        self.resblocks = self.resblocks[:max_index+1]
+        return take_indices
+    def forward(self, x: torch.Tensor, 
+                attn_mask: Optional[torch.Tensor]=None,
+                )->torch.Tensor:
+        if not self.batch_first: x = x.transpose(0, 1).contiguous()
+        for r in self.resblocks:
+            # 以增加计算量为代价,大幅降低训练过程中的显存GPU内存占用
+            if self.grad_checkpointing and not torch.jit.is_scripting():
+                x = checkpoint(r, x, None, None, attn_mask, use_reentrant=False)
+            else: x = r(x, attn_mask=attn_mask)
+        if not self.batch_first: x = x.transpose(0, 1)
+        return x
+    
+
+# --------------------------------------------------------------------------------------
+# 下面的代码共同构成了CLIP(Contrastive Language–Image Pretraining)模型的
+# 双塔结构(Dual-tower architecture),并扩展支持了多种变体(如CoCa,带Attentional Pooling的ViT)
+# --------------------------------------------------------------------------------------
+def _expand_token(token, batch_size:int):
+    """对输入的张量 token 进行维度扩展,使其适配指定的批量大小"""
+    return torch.view(1, 1, -1).expand(batch_size, -1, -1)
+
+
+class VisionTransformer(nn.Module):
+    output_tokens: torch.jit.Final[bool]
+    def __init__(self, image_size: int,
+                 patch_size: int, 
+                 width: int,
+                 layers: int,
+                 heads: int,
+                 mlp_ratio: float,
+                 ls_init_value: float = None,
+                 attentional_pool: bool = False,
+                 attn_pooler_queries: int = 256,
+                 attn_pooler_heads: int = 8,
+                 output_dim: int=512,
+                 patch_dropout: float=0.,
+                 no_ln_pre: bool=False,
+                 pos_embed_type: str="learnable",
+                 pool_type: str='tok',
+                 final_ln_after_pool: bool=False,
+                 act_layer: Callable=nn.GELU,
+                 norm_ayer: Callable=LayerNorm,
+                 output_tokens: bool=False,
+                 block_type: Optional[str]=None,
+                 qk_norm: bool=False,
+                 scaled_cosine_attn: bool=False,
+                 scale_heads: bool=False,
+                 scale_attn_inner: bool=False,
+                 scale_attn: bool=False,
+                 scale_fc: bool=False,
+                 ) -> None:
+        super().__init__()
+        assert pool_type in ['tok', 'avg', 'none']
+        self.output_tokens = output_tokens
+        
+
+
+    

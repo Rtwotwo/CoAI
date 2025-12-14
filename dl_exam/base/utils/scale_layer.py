@@ -1,7 +1,6 @@
 """
 Author: Redal
-Date: 2025-10-11
-Todo: __init__.py
+Date: 2025-12-13
+Todo: 
 Homepage: https://github.com/Rtwotwo/Code-Exam.git
 """
-

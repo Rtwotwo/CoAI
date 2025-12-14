@@ -32,3 +32,36 @@ def replace_linear(model, linear_replacement, include_modules=['c_fc', 'c_proj']
     for name, module in model.named_modules():
         if len(list(module.children())) > 0:
             replace_linear(module, )
+
+
+def feature_take_indices(
+        num_features: int, 
+        indices: Optional[Union[int, List[int]]]=None,
+        as_set: bool = False,
+        )->Tuple[List[int], int]:
+    """根据输入的索引参数,结合特征总数num_features,筛选出有效的特征索引列表,
+    并返回该索引集合或列表以及其中的最大索引值"""
+    # 当所有的特征均为None
+    if indices is None: indices = num_features
+    # 选取特征的最后indices个索引
+    if isinstance(indices, int):
+        _assert(0<= indices < num_features, f'feature index {indices} is out of range (0 to {num_features - 1})')
+        take_indices = [num_features - indices + i for i in range(indices)]
+    else:
+        take_indices: List[int] = []
+        for i in indices:
+            idx = num_features + i if i<0 else i
+            _assert(0<= idx < num_features, f'feature index {idx} is out of range (0 to {num_features - 1})')
+            take_indices.append(idx)
+    # 判断是否在PyTorch脚本编译模式下,该模式不支持集合set
+    if not torch.jit.is_scripting() and as_set:
+        return set(take_indices), max(take_indices)
+    return take_indices, max(take_indices)
+
+
+def _out_indices_as_tuple(x: Union[int, Tuple[int, ...]]
+                          )->Tuple[int, ...]:
+    if isinstance(x, int):
+        # 如果x是int类型,返回最后x个索引
+        return tuple(range(-x, 0))
+    return tuple(x)
