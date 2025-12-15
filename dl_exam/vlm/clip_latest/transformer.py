@@ -13,6 +13,8 @@ Todo:
 Homepage: https://github.com/Rtwotwo/Code-Exam.git
 """
 import math
+
+from setuptools import Require
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -642,7 +644,30 @@ class VisionTransformer(nn.Module):
         super().__init__()
         assert pool_type in ['tok', 'avg', 'none']
         self.output_tokens = output_tokens
+        image_height, image_width = self.image_size = to_2tuple(image_size)
+        patch_height, patch_width = self.patch_size = to_2tuple(patch_size)
+        self.grad_size = (image_height // patch_height, image_width // patch_width)
+        self.final_ln_after_pool = final_ln_after_pool
+        self.output_dim = output_dim
+        # 利用卷积的核尺寸=步长特性完成无重叠分块,并同步完成通道维度的映射
+        self.conv1 = nn.Conv2d(in_channels=3,
+                                out_channels=width,
+                                kernel_size=patch_size,
+                                stride=patch_size,
+                                bias=False)
+        # 类别编码以及位置编码class and positional embedding
+        scale = width ** -0.5
+        self.class_embedding = nn.Parameter(scale * torch.randn(width))
+        if pos_embed_type == 'learnable':
+            self.positional_embedding = nn.Parameter(
+                scale * torch.randn(self.grad_szie[0] * self.grad_size[1] + 1, width))
+        elif pos_embed_type == 'sin_cos_2d':
+            # 选择使用sin-cos embedding
+            assert self.grad_size[0] == self.grad_size[1], \
+                f"sin-cos embedding仅支持方块分块,当前分块大小为{self.grad_size}"
+            self.positional_embedding = nn.Parameter(
+                scale * torch.randn(self.grad_size[0] * self.grad_size[1] +1, width), requires_grad=False)
+            pos_embed_type = get_2d_sincos_pos_embed(width, self.grad_size[0], cls_token=True)
+            self.positional_embedding.data.copy_(torch.from_numpy(pos_embed_type).float())
+        else: raise ValueError(f"[WARNING] 未知的位置编码类型: {pos_embed_type}")
         
-
-
-    

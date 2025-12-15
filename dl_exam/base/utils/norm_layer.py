@@ -92,6 +92,8 @@ class LayerNormFP32(LayerNorm):
 class BatchNorm(nn.Module):
     """"""
 
+class SyncBatchNorm(nn.Module):
+    """"""
 
 class InstanceNorm(nn.Module):
     """"""
