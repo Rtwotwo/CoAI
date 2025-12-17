@@ -1,3 +1,18 @@
+# For 3D
+[submodule "dl_exam/3d/clones/dust3r"]
+	path = dl_exam/3d/clones/dust3r
+	url = https://github.com/naver/dust3r
+[submodule "dl_exam/3d/clones/vggt"]
+	path = dl_exam/3d/clones/vggt
+	url = https://github.com/facebookresearch/vggt.git
+[submodule "dl_exam/3d/clones/Depth-Anything-3"]
+	path = dl_exam/3d/clones/Depth-Anything-3
+	url = https://github.com/ByteDance-Seed/Depth-Anything-3
+[submodule "dl_exam/3d/clones/map-anything"]
+	path = dl_exam/3d/clones/map-anything
+	url = https://github.com/facebookresearch/map-anything.git
+
+
 # For AIGC
 [submodule "dl_exam/aigc/clones/stablediffusion"]
 	path = dl_exam/aigc/clones/stablediffusion
@@ -5,16 +20,39 @@
 [submodule "dl_exam/aigc/clones/stable-diffusion-webui"]
 	path = dl_exam/aigc/clones/stable-diffusion-webui
 	url = https://github.com/AUTOMATIC1111/stable-diffusion-webui
+[submodule "dl_exam/aigc/clones/diffusers"]
+	path = dl_exam/aigc/clones/diffusers
+	url = https://github.com/huggingface/diffusers
 
 
 # For BASE
+[submodule "dl_exam/base/clones/transformers"]
+	path = dl_exam/base/clones/transformers
+	url = https://github.com/huggingface/transformers.git
+[submodule "dl_exam/base/clones/peft"]
+	path = dl_exam/base/clones/peft
+	url = https://github.com/huggingface/peft
 
 
 # For NLP
-
+[submodule "dl_exam/nlp/clones/vllm"]
+	path = dl_exam/nlp/clones/vllm
+	url = https://github.com/vllm-project/vllm.git
+[submodule "dl_exam/nlp/clones/DeepLearningExamples"]
+	path = dl_exam/nlp/clones/DeepLearningExamples
+	url = https://github.com/NVIDIA/DeepLearningExamples.git
+[submodule "dl_exam/nlp/clones/LLaVA-RLHF"]
+	path = dl_exam/nlp/clones/LLaVA-RLHF
+	url = https://github.com/llava-rlhf/LLaVA-RLHF.git
 
 # For RL
-
+[submodule "dl_exam/rl/clones/baselines"]
+	path = dl_exam/rl/clones/baselines
+	url = https://github.com/openai/baselines.git
+[submodule "dl_exam/rl/clones/cleanrl"]
+	path = dl_exam/rl/clones/cleanrl
+	url = https://github.com/vwxyzjn/cleanrl.git
+	
 
 # For VLM 
 [submodule "dl_exam/vlm/clones/CLIP"]
@@ -26,27 +64,9 @@
 [submodule "dl_exam/vlm/clones/BLIP"]
 	path = dl_exam/vlm/clones/BLIP
 	url = https://github.com/salesforce/BLIP
-[submodule "ml-mobileclip"]
-	path = dl_exam/vlm/clones/ml-mobileclip
-	url = https://github.com/apple/ml-mobileclip.git
-[submodule "dl_exam/vlm/clones/CLIP4Clip"]
-	path = dl_exam/vlm/clones/CLIP4Clip
-	url = https://github.com/ArrowLuo/CLIP4Clip.git
-[submodule "dl_exam/vlm/clones/ViLT"]
-	path = dl_exam/vlm/clones/ViLT
-	url = https://github.com/dandelin/ViLT.git
-[submodule "dl_exam/vlm/clones/PointCLIP"]
-	path = dl_exam/vlm/clones/PointCLIP
-	url = https://github.com/dandelin/PointCLIP.git
 [submodule "dl_exam/vlm/clones/VLM-R1"]
 	path = dl_exam/vlm/clones/VLM-R1
 	url = https://github.com/om-ai-lab/VLM-R1.git
-[submodule "dl_exam/vlm/clones/Griffon"]
-	path = dl_exam/vlm/clones/Griffon
-	url = https://github.com/jefferyZhan/Griffon.git
-[submodule "dl_exam/vlm/clones/LLaVA-RLHF"]
-	path = dl_exam/vlm/clones/LLaVA-RLHF
-	url = https://github.com/llava-rlhf/LLaVA-RLHF.git
 
 
 # For VLA
@@ -59,10 +79,6 @@
 [submodule "dl_exam/vla/clones/RoboticsDiffusionTransformer"]
 	path = dl_exam/vla/clones/RoboticsDiffusionTransformer
 	url = https://github.com/thu-ml/RoboticsDiffusionTransformer.git
-
-[submodule "dl_exam/rl/clones/baselines"]
-	path = dl_exam/rl/clones/baselines
-	url = https://github.com/openai/baselines.git
-[submodule "dl_exam/rl/clones/cleanrl"]
-	path = dl_exam/rl/clones/cleanrl
-	url = https://github.com/vwxyzjn/cleanrl.git
+[submodule "dl_exam/vla/clones/robotics_transformer"]
+	path = dl_exam/vla/clones/robotics_transformer
+	url = https://github.com/google-research/robotics_transformer

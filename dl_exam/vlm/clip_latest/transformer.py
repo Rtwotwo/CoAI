@@ -651,10 +651,10 @@ class VisionTransformer(nn.Module):
         self.output_dim = output_dim
         # 利用卷积的核尺寸=步长特性完成无重叠分块,并同步完成通道维度的映射
         self.conv1 = nn.Conv2d(in_channels=3,
-                                out_channels=width,
-                                kernel_size=patch_size,
-                                stride=patch_size,
-                                bias=False)
+                            out_channels=width,
+                            kernel_size=patch_size,
+                            stride=patch_size,
+                            bias=False)
         # 类别编码以及位置编码class and positional embedding
         scale = width ** -0.5
         self.class_embedding = nn.Parameter(scale * torch.randn(width))
@@ -670,4 +670,181 @@ class VisionTransformer(nn.Module):
             pos_embed_type = get_2d_sincos_pos_embed(width, self.grad_size[0], cls_token=True)
             self.positional_embedding.data.copy_(torch.from_numpy(pos_embed_type).float())
         else: raise ValueError(f"[WARNING] 未知的位置编码类型: {pos_embed_type}")
+        # 设置patch_dropout=0.则PatchDropout不生效
+        self.patch_dropout = nn.Dropout(patch_dropout) if patch_dropout>0 else nn.Identity()
+        self.ln_pre = nn.Identity() if no_ln_pre else norm_ayer(width)
+        self.transformer = Transformer(
+                            width = width,
+                            layers=layers,
+                            heads = heads,
+                            mlp_ratio = mlp_ratio,
+                            ls_init_value = ls_init_value,
+                            act_layer = act_layer,
+                            norm_ayer = norm_ayer,
+                            block_type=block_type,
+                            qk_norm = qk_norm,
+                            scaled_cosine_attn = scaled_cosine_attn,
+                            scale_heads = scale_heads,
+                            scale_attn_inner = scale_attn_inner,
+                            scale_attn = scale_attn,
+                            scale_fc = scale_fc,)
+        # 根据传入的attentional_pool参数来决定是否启用,如何配置注意力池化层
+        # 并完成后续的归一化和投影层初始化
+        if attentional_pool:
+            if isinstance(attentional_pool, str):
+                self.attentional_pool = attentional_pool
+                self.pool_type = 'none'
+                if attentional_pool in ('parallel', 'cascade'):
+                    # 初始化主注意力池化层：使用指定的查询数(attn_pooler_queries)
+                    self.attn_pool = AttentionalPooler(
+                            d_model = output_dim,
+                            context_dim = width,
+                            n_head = attn_pooler_heads,
+                            n_queries = attn_pooler_queries,)
+                    # 初始化对比学习用的注意力池化层:固定查询数为1,通常用于生成单向量的对比特征
+                    self.attn_pool_contrastive = AttentionalPooler(
+                            d_model = output_dim,
+                            context_dim = width,
+                            n_head = attn_pooler_heads,
+                            n_queries = 1,)
+                else: assert False, f'[WARNING] 未知的注意力池化类型attentinoal_pool: {attentional_pool}'
+            else: # 仅启用基础注意力池化,保留普通池化的配置
+                self.attn_pool = ''
+                self.pool_type = pool_type
+                self.attn_pool = AttentionalPooler(
+                            d_model = output_dim, 
+                            context_dim = width,
+                            n_head = attn_pooler_heads,
+                            n_queries = attn_pooler_queries,)
+                self.attn_pool_contrastive = None
+            # 注意力池化的输出维度固定为output_dim
+            pool_dim = output_dim 
+        # 注意力池化禁用分支(attentional_pool为假False)
+        else:
+            self.attn_pool = None
+            pool_dim = width
+            self.pool_type = pool_type
+        self.ln_post = norm_ayer(pool_dim)
+        self.proj = nn.Parameter(scale * torch.randn(pool_dim, output_dim))
+        self.init_parameters()
+    def init_parameters(self, ):
+        """初始化模型参数,包括Transformer层、注意力池化层、归一化层和投影层
+        TODO OpenAI的CLIP Model并没有初始化VisionTransformer的参数,需要有实验结果好坏决定
+        基本使用normal_正态分布进行初始化(均值0,标准差 self.scale)"""
+        nn.init.normal_(self.class_embedding, std=self.scale)
+        nn.init.normal_(self.positional_embedding, std=self.scale)
+        # 计算标准差并初始化Transformer层
+        proj_std = (self.transformer.width**-0.5) * ((2 * self.transformer.layers) ** -0.5)
+        attn_std = self.transformer.width ** -0.5
+        fc_std  = (2 * self.transformer.width) ** -0.5
+        for block in self.transformer.resblocks:
+            nn.init.normal_(block.attn.in_proj.weight, std=attn_std)
+            nn.init.normal_(block.attn.out_proj.weight, std=proj_std)
+            nn.init.normal_(block.mlp.c_fc.weight, std=fc_std)
+            nn.init.normal_(block.mlp.c_proj.weight, std=proj_std)
+        if self.text_projection is not None:
+            nn.init.normal_(self.text_projection.weight, std=self.scale)
+    def lock(self, unlocked_groups: int=0, freeze_bn_stats: bool=False):
+        """冻结模型大部分参数的梯度计算(即固定参数不更新),仅解锁指定数量的参数组让其可训练"""
+        # 全局冻结所有参数
+        for param in self.parameters():
+            param.requires_grad = False
+        if unlocked_groups > 0:
+            # 将模型的不同模块拆分为有序的参数组,分组逻辑贴合模型的结构层级
+            # 前置模块→transformer中间残差块→transformer末尾模块→输出层
+            groups = [  [self.conv1, self.class_embedding, 
+                        self.positional_embedding, self.ln_pre],
+                        *self.transformer.resblocks[:-1],
+                        [self.transformer.resblocks[-1],self.ln_post],
+                        self.proj,]
+            def _unlock(x):
+                """递归解锁参数组x中的所有参数,支持嵌套结构"""
+                # 若输入是序列(列表/元组等),递归遍历内部元素
+                if isinstance(x, Sequence):
+                    for g in x: _unlock(g)
+                else:
+                    # x是单个模块/参数,则直接开启参数梯度
+                    if isinstance(x, torch.nn.Parameter):
+                        x.requires_grad = True
+                    # 若x是nn.Module,则遍历解锁其所有参数
+                    else:
+                        for p in x.parameters():
+                            p.requires_grad = True
+            _unlock(groups[-unlocked_groups:])
+    @torch.jit.ignore
+    def set_grad_checkpointing(self, enabled: bool=True):
+        """使能transformer的梯度检查点grad_checkpointing"""
+        self.transformer.grad_checkpointing = enabled
+    @torch.jit.ignore
+    def no_weight_decay(self):
+        """返回transformer中所有参数的名称列表,用于配置优化器时排除权重衰减"""
+        # 对于timm库,一维参数(如 logit_scale、logit_bias、层归一化/
+        # 批归一化的scale参数、各类偏置bias)默认会被排除在权重衰减之外
+        no_wd = {'positional_embedding', 'class_embedding'}
+        return no_wd
+    def _global_pool(self, x:torch.Tensor)->Tuple[torch.Tensor, torch.Tensor]:
+        """pooled全局池化特征, tokens局部特征"""
+        if self.pool_type == 'avg': # 通常指的是平均池化
+            pooled, tokens = x[:, 1:].mean(dim=1), x[:, 1:]
+        elif self.pool_type == 'tok': # token池化,通常是 cls_token
+            pooled, tokens = x[:, 0], x[:, 1:]
+        else:
+            pooled, tokens = x, x
+        return pooled, tokens
+    def _embeds(self, x:torch.Tensor)->torch.Tensor:
+        """将输入的图像张量转化为适用于Transformer处理的序列张量"""
+        # [batch_size, channels, height, width]->[batch_size, dim, grid, grid]
+        x = self.conv1(x) 
+        x = x.reshape(x.shape[0], x.shape[1], -1) # shape = [*, dim, grid*grid]
+        x = x.permute(0, 2, 1)
+        # 类型和位置编码,x的形状是[*, grid ** 2 + 1, width]
+        # 拼接class_embedding初始一维张量[width],需要使用_expand_token扩展
+        x = torch.cat([_expand_token(self.class_embedding, x.shape[0]).to(x.dtype), x], dim=1)
+        x = x + self.positional_embedding.to(x.dtype)
+        # 使用PatchDropout对输入进行随机丢弃
+        x = self.patch_dropout(x)
+        x = self.ln_pre(x)
+        return x
+    def _pool(self, x: torch.Tensor)->Tuple[torch.Tensor, torch.Tensor]:
+        """对输入的张量x进行不同策略的池化处理,最后返回
+        pooled(池化后的核心特征)和tokens(池化过程中保留的特征令牌/序列特征)"""
+        if self.attn_pool is not None:
+            # 存在对比注意力池化attn_pool_contrastive
+            # 但是这是未完全测试的实验性逻辑(WIP)
+            if self.attn_pool_contrastive is not None:
+                x = self.ln_post(x)
+                if self.pool_type == 'parallel':
+                    pooled = self.attn_pool_contrastive(x)
+                else: 
+                    assert self.pool_type == 'cascade', \
+                        f'[WARNING] pool_type必须为cascade!'
+                    pooled = self.attn_pool_contrastive(x)
+            # 原版OpenAI的CoCa的CLIP的实现
+            else:
+                x = self.attn_pool(x)
+                x = self.ln_post(x)
+                pooled, tokens = self._global_pool(x)
+        # 全局池化(_global_pool)并根据final_ln_after_pool决定层归一化的时机
+        elif self.final_ln_after_pool:
+            pooled, tokens = self._global_pool(x)
+            pooled = self.ln_post(pooled)
+        else:
+            x = self.ln_post(x)
+            pooled, tokens = self._global_pool(x)
+        return pooled, tokens
+    def forward_intermediates(self, x: torch.Tensor,
+                              indices: Optional[Union[int, List[int]]]=None,
+                              stop_early: bool = False,
+                              normalize_intermediates: bool=False,
+                              intermediates_only: bool=False,
+                              output_fmt: str="NCHW",
+                              output_extra_tokens: bool=False
+                              )->Dict[str, Union[torch.Tensor, List[torch.Tensor]]]:
+        """indices如果是整数,则取最后n个块;如果是 None,则取所有块;如果是序列,则选择匹配的索引
+        stop_early当遇到最后一个所需的中间结果时,停止对块的迭代
+        intermediates_only仅返回中间特征;normalize_intermediates对所有中间结果应用最终的归一化层
+        output_fmt中间特征输出的形状;output_extra_tokens返回额外的前缀类别标记"""
+        assert output_fmt in ["NCHW", "NLC"], f'[WARNING] output_fmt必须是"NCHW"或"NLC"!'
+        reshape = output_fmt == 'NLC'
         
+    

@@ -18,7 +18,7 @@ from torch import _assert
 from torchvision.ops.misc import FrozenBatchNorm2d
 import collections.abc
 from itertools import repeat
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union, Any
 
 
 def freeze_batch_norm_2d(module, module_match={}, name=''):
