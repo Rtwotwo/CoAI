@@ -842,9 +842,142 @@ class VisionTransformer(nn.Module):
                               )->Dict[str, Union[torch.Tensor, List[torch.Tensor]]]:
         """indices如果是整数,则取最后n个块;如果是 None,则取所有块;如果是序列,则选择匹配的索引
         stop_early当遇到最后一个所需的中间结果时,停止对块的迭代
+        indices/stop_early灵活筛选中间层,避免冗余计算,适用于需要多层特征融合的场景
         intermediates_only仅返回中间特征;normalize_intermediates对所有中间结果应用最终的归一化层
         output_fmt中间特征输出的形状;output_extra_tokens返回额外的前缀类别标记"""
         assert output_fmt in ["NCHW", "NLC"], f'[WARNING] output_fmt必须是"NCHW"或"NLC"!'
         reshape = output_fmt == 'NLC'
+        # 前向传播核心流程
+        B, _, height, width = x.shape
+        x = self._embeds(x)
+        x, intermediates = self.transformer.forward_intermediates(
+                                            x = x,
+                                            indices = indices,
+                                            stop_early = stop_early)
+        # 处理中间特征图intermediates
+        if normalize_intermediates:
+            # 将ln_post层应用到所有中间结果中
+            intermediates = [self.ln_post(xi) for xi in intermediates]
+        # 一个始终存在的类别标记-前缀token与空间token分离
+        # 前缀token与空间特征分离:精细化特征利用
+        num_prefix_tokens = 1
+        if num_prefix_tokens:
+            prefix_tokens = [y[:, 0:num_prefix_tokens] for y in intermediates]
+            intermediates = [y[:, num_prefix_tokens:] for y in intermediates]
+        else: prefix_tokens = None
+        # 如果是NLC格式,需要重塑为NCHW才继续输出
+        if reshape:
+            H, W = height // self.patch_size[0], width // self.patch_size[1]
+            intermediates = [y.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous() for y in intermediates]
         
+        output = {'image_intermediates': intermediates}
+        if prefix_tokens is not None:
+            output['image_intermediates_prefix'] = prefix_tokens
+        if intermediates_only: return output
+
+        pooled, _ = self._pool(x)
+        if self.proj is not None:
+            pooled = self.proj(pooled)
+        output['image_intermediates'] = pooled
+        return output
+    def prune_intermediate_layers(self, indices: Union[int, List[int]]=1,
+                                  prune_norm: bool=False,
+                                  prune_attn: bool=True):
+        """在剪枝过程中不要求特殊的中间层特征"""
+        take_indices = self.transformer.prune_intermediate_layers(indices)
+        if prune_norm: self.ln_post = nn.Identity()
+        if prune_attn: self.proj = None
+        return take_indices
+    def forward(self, x:torch.Tensor):
+        x = self._embeds(x)
+        x = self.transformer(x)
+        pooled, tokens = self._pool(x)
+        # 池化后的特征映射到目标维度
+        # slef.proj在没有bias时可以直接矩阵乘
+        if self.proj is not None:
+            pooled = pooled @ self.proj
+        # 是否返回全局池化特征和token级特征
+        if self.output_tokens: return pooled, tokens
+        return pooled
     
+
+def text_global_pool(x:torch.Tensor,
+                     text: Optional[torch.Tensor],
+                     pool_type: str='argmax',
+                     eos_token_id: Optional[int]=None
+                     )->torch.Tensor:
+    """针对文本类张量的全局池化操作x:[batch_size, seq_len, hidden_dim]
+    池化本质:所有有效池化分支都是从序列维度L,选择一个位置压缩为单个特征向量
+    是文本特征从"序列级"到"样本级"的常见操作"""
+    if pool_type == 'first':
+        # 适用于文本序列以cls_token开头的情况(如BERT类模型)
+        # cls_token通常聚合了整句信息
+        pooled = x[:, 0]
+    elif pool_type == 'last':
+        # 适用于一些自回归模型(如GPT类),最后一个token的特征
+        # 包含序列末尾的信息但未必能很好聚合整句信息
+        pooled = x[:, -1]
+    elif pool_type == 'argmax':
+        # 从eot_token中选择最接近的token
+        assert text is not None, f'[WARNING] text必须不为None!'
+        pooled = x[torch.arange(x.shape[0], device=x.device), text.argmax(dim=-1)]
+    elif pool_type == 'eos':
+        # 取指定eos_token_id位置的特征
+        assert text is not None, f'[WARNING] text必须不为None!'
+        assert eos_token_id is not None, f'[WARNING] eos_token_id必须不为None!'
+        idx = (text == eos_token_id).int().argmax(dim=-1)
+        pooled = x[torch.arange(x.shape[0], device=x.device), idx]
+    else: pooled = x
+    return pooled
+
+
+class TextTransformer(nn.Module):
+    def __init__(self, context_length:int=77, # 文本的最大上下文长度
+                 vocab_size: int=49408, # 对应OpenAI的CLIP/BPE词汇表大小
+                 width: int=512,
+                 heads: int=8,
+                 layers: int=12,
+                 mlp_ratio: float=4.0,
+                 is_init_value:float=None, # layer scale初始值
+                 output_dim: Optional[int]=512, #  最终输出的维度
+                 embed_cls: bool=False, # 是否在序列开头嵌入[CLS]token
+                 no_causal_mask: bool=False, # 是否关闭因果掩码,即自回归掩码
+                 use_pad_mask: bool=False, # 是否使用padding掩码
+                 correct_cls_mask: bool=False, # 修正[CLS]token的掩码
+                 pad_id: int=0, # padding token的id
+                 eos_id: int=2,
+                 pool_type: str='argmax',
+                 proj_type: str='linear',
+                 proj_bias: bool=False,
+                 act_layer: Type[nn.Module]=nn.GELU,
+                 norm_layer: Type[nn.Module]=nn.LayerNorm,
+                 output_tokens: bool=True, # 控制输出是整个序列的token嵌入还是聚合后的单个向量
+                 block_type: Optional[str]=None, # Transformer block 的类型
+                 qk_norm: bool=False, # 是否对注意力的 Q/K 进行归一化
+                 scaled_cosine_attn: bool=False, # 是否使用缩放余弦注意力
+                 scale_heads: bool=False,
+                 scale_attn_inner: bool=False,
+                 scale_attn: bool=False,
+                 scale_fc: bool=False,
+                 )->None:
+        super().__init__()
+        assert proj_type in ['first', 'last', 'argmax', 'eos', 'none'],\
+            f'[WARNING] proj_type必须为first/last/argmax/eos/none,但你输入的是{proj_type}!'
+        self.output_tokens = output_tokens
+        self.num_pos = self.context_length = self.context_length
+        self.vocab_size = vocab_size
+        self.width = width
+        self.output_dim = output_dim
+        self.heads = heads
+        self.pad_id = pad_id
+        self.eos_id = eos_id
+        self.pool_type = pool_type
+        self.use_pad_mask = use_pad_mask and no_causal_mask
+        self.correct_cls_mask = correct_cls_mask 
+
+        self.token_embedding = nn.Embedding(vocab_size, width)
+        if embed_cls: 
+            self.cls_emb = nn.Parameter(torch.empty(width))
+            self.num_pos += 1
+        else: self.cls_emb = None
+

@@ -23,6 +23,9 @@
 [submodule "dl_exam/aigc/clones/diffusers"]
 	path = dl_exam/aigc/clones/diffusers
 	url = https://github.com/huggingface/diffusers
+[submodule "dl_exam/aigc/clones/TRELLIS.2"]
+	path = dl_exam/aigc/clones/TRELLIS.2
+	url = https://github.com/microsoft/TRELLIS.2
 
 
 # For BASE
@@ -45,6 +48,7 @@
 	path = dl_exam/nlp/clones/LLaVA-RLHF
 	url = https://github.com/llava-rlhf/LLaVA-RLHF.git
 
+
 # For RL
 [submodule "dl_exam/rl/clones/baselines"]
 	path = dl_exam/rl/clones/baselines
@@ -52,6 +56,15 @@
 [submodule "dl_exam/rl/clones/cleanrl"]
 	path = dl_exam/rl/clones/cleanrl
 	url = https://github.com/vwxyzjn/cleanrl.git
+[submodule "dl_exam/rl/clones/tianshou"]
+	path = dl_exam/rl/clones/tianshou
+	url = https://github.com/thu-ml/tianshou.git
+[submodule "dl_exam/vla/clones/lerobot"]
+	path = dl_exam/vla/clones/lerobot
+	url = https://github.com/huggingface/lerobot
+[submodule "dl_exam/rl/clones/stable-baselines3"]
+	path = dl_exam/rl/clones/stable-baselines3
+	url = https://github.com/DLR-RM/stable-baselines3.git
 	
 
 # For VLM 
@@ -70,15 +83,15 @@
 
 
 # For VLA
-[submodule "dl_exam/vla/clones/GraspVLA"]
-	path = dl_exam/vla/clones/GraspVLA
-	url = https://github.com/PKU-EPIC/GraspVLA.git
-[submodule "dl_exam/vla/clones/SimpleVLA-RL"]
-	path = dl_exam/vla/clones/SimpleVLA-RL
-	url = https://github.com/PRIME-RL/SimpleVLA-RL
 [submodule "dl_exam/vla/clones/RoboticsDiffusionTransformer"]
 	path = dl_exam/vla/clones/RoboticsDiffusionTransformer
 	url = https://github.com/thu-ml/RoboticsDiffusionTransformer.git
 [submodule "dl_exam/vla/clones/robotics_transformer"]
 	path = dl_exam/vla/clones/robotics_transformer
 	url = https://github.com/google-research/robotics_transformer
+[submodule "dl_exam/vla/clones/dexbotic"]
+	path = dl_exam/vla/clones/dexbotic
+	url = https://github.com/Dexmal/dexbotic
+[submodule "dl_exam/vla/clones/openvla-oft"]
+	path = dl_exam/vla/clones/openvla-oft
+	url = https://github.com/moojink/openvla-oft
