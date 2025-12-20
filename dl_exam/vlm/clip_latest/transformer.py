@@ -945,7 +945,7 @@ class TextTransformer(nn.Module):
                  use_pad_mask: bool=False, # 是否使用padding掩码
                  correct_cls_mask: bool=False, # 修正[CLS]token的掩码
                  pad_id: int=0, # padding token的id
-                 eos_id: int=2,
+                 eos_id: int=2, # 句子结束的token id
                  pool_type: str='argmax',
                  proj_type: str='linear',
                  proj_bias: bool=False,
@@ -1046,8 +1046,8 @@ class TextTransformer(nn.Module):
         lock_text_tower(self, unlocked_layers)
     @torch.jit.ignore
     def no_weight_decay(self,):
-        # 对于timm优化器,默认会排除一维参数,如
-        # logit_scale、logit_bias、ln/bn 尺度参数、偏置参数等
+        # 返回不需要权重衰减（Weight Decay）的参数名集合
+        # 对于timm优化器,默认会排除一维参数,如logit_scale、logit_bias尺度参数、偏置参数等
         no_wd = {'positional_embedding'}
         if self.cls_emb is not None: no_wd.add('cls_emb')
         return no_wd
@@ -1055,7 +1055,7 @@ class TextTransformer(nn.Module):
         # 惰性创建因果注意力掩码，使标记之间具有完全注意力
         # PyTorch 使用加性注意力掩码；用负无穷填充
         mask = torch.empty(self.num_pos, self.num_pos)
-        # 构造上三角的mask,并将下三角清零
+        # 构造上三角的mask,并将下三角清零,上三角-inf
         mask.fill_(float('-inf'))
         mask.triu_(1) 
         return mask
@@ -1063,7 +1063,51 @@ class TextTransformer(nn.Module):
                              seq_len: int, # [B, L]–尚未包含CLS的原始文本ID
                              dtype: torch.dtype, # L (+1 if CLS added)
                              )->torch.Tensor:
-        """"""
+        """构建混合掩码(同时屏蔽padding token和可选的CLS token)
+        返回形状为[B*heads, seq_len, seq_len]的加性掩码(Additive Mask)"""
+        # 生成 padding 掩码
+        valid = text != self.pad_id # [B, L] (True = keep)
+        if self.cls_emb is not None: 
+            cls_valid = valid.new_ones(valid.size(0), 1)
+            valid = torch.cat([valid, cls_valid] if self.correct_cls_mask else [cls_valid, valid], 1)
+        # 扩展为注意力掩码形状
+        key_mask = valid.unsqueeze(1).expand(-1, seq_len, seq_len) # [B, Q, K]
+        additive = torch.zeros_like(key_mask, dtype=dtype)
+        additive.masked_fill_(~key_mask, float('-inf'))
+        # 适配多头注意力
+        additive = additive.repeat_interleave(self.heads, 0) # [B*heads, Q, K]
+        return additive
+    def _embed(self, text)->Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """Transformer类模型中的嵌入层处理函数,负责将输入的文本token索引转换为向量表示
+        并完成位置嵌入、CLS token 拼接、注意力掩码构建等预处理步骤"""
+        cast_dtype = self.transformer.get_cast_dtype()
+        B, seq_len = text.shape
+        x = self.token_embedding(text).to(cast_dtype) # [B, seq_len, width]
+        # 添加cls_emb,注意需要适配x的embedding维度
+        if self.cls_emb is not None:
+            x = torch.cat([x, _expand_token(self.cls_emb, x.size(0))], 1)
+            seq_len += 1
+        attn_mask = self.attn_mask
+        # class + padding 的additive mask
+        if self.use_pad_mask or self.cls_emb is not None:
+            add_mask = self._build_additive_mask(text, seq_len, x.dtype)
+            if attn_mask is not None:
+                attn_mask = attn_mask[:seq_len, :seq_len].unsqueeze(0) + add_mask
+            else: attn_mask = add_mask
+        x = x + self.positional_embedding[:seq_len].to(cast_dtype)
+        return x, attn_mask
+    def forward_intermediates(self, text:torch.Tensor,
+                              indices: Optional[Union[int, List[int]]]=None,
+                              stop_early: bool = False,
+                              normalize_inermediates: bool=False,
+                              intermediates_only: bool=False,
+                              output_fmt: str= 'NCHW',
+                              output_extra_token: bool=False,
+                              )->Dict[str, Union[torch.Tensor, List[torch.Tensor]]]:
+        """文本编码器:不仅返回最终的文本特征，还返回 Transformer各层的中间特征
+        裁剪掉Transformer中不需要的层,同时可选裁剪归一化层和投影头"""
+        
+
         
 
 
