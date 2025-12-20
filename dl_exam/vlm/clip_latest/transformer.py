@@ -738,7 +738,7 @@ class VisionTransformer(nn.Module):
         attn_std = self.transformer.width ** -0.5
         fc_std  = (2 * self.transformer.width) ** -0.5
         for block in self.transformer.resblocks:
-            nn.init.normal_(block.attn.in_proj.weight, std=attn_std)
+            nn.init.normal_(block.attn.in_proj_weight, std=attn_std)
             nn.init.normal_(block.attn.out_proj.weight, std=proj_std)
             nn.init.normal_(block.mlp.c_fc.weight, std=fc_std)
             nn.init.normal_(block.mlp.c_proj.weight, std=proj_std)
@@ -938,7 +938,7 @@ class TextTransformer(nn.Module):
                  heads: int=8,
                  layers: int=12,
                  mlp_ratio: float=4.0,
-                 is_init_value:float=None, # layer scale初始值
+                 ls_init_value:float=None, # layer scale初始值
                  output_dim: Optional[int]=512, #  最终输出的维度
                  embed_cls: bool=False, # 是否在序列开头嵌入[CLS]token
                  no_causal_mask: bool=False, # 是否关闭因果掩码,即自回归掩码
@@ -972,7 +972,9 @@ class TextTransformer(nn.Module):
         self.pad_id = pad_id
         self.eos_id = eos_id
         self.pool_type = pool_type
+        # 仅在双向(非因果掩码)模式下使用pad mask
         self.use_pad_mask = use_pad_mask and no_causal_mask
+        # 修复CoCa的cls mask
         self.correct_cls_mask = correct_cls_mask 
 
         self.token_embedding = nn.Embedding(vocab_size, width)
@@ -980,4 +982,159 @@ class TextTransformer(nn.Module):
             self.cls_emb = nn.Parameter(torch.empty(width))
             self.num_pos += 1
         else: self.cls_emb = None
+
+        self.positional_embedding = nn.Parameter(torch.empty(self.num_pos, width))
+        self.transformer = Transformer(width=width,
+                                       layers=layers,
+                                       heads=heads,
+                                       mlp_ratio=mlp_ratio,
+                                       ls_init_value=ls_init_value,
+                                       act_layer=act_layer,
+                                       norm_layer=norm_layer,
+                                       block_type=block_type,
+                                       qk_norm=qk_norm,
+                                       scaled_cosine_attn=scaled_cosine_attn,
+                                       scale_heads=scale_heads,
+                                       scale_attn=scale_attn,
+                                       scale_attn_inner=scale_attn_inner,
+                                       scale_fc=scale_fc)
+        # 在Transformer输出后添加一层归一化,稳定训练过程
+        self.ln_final = norm_layer(width)
+        # 双向注意力如BERT,无因果掩码
+        if no_causal_mask: self.attn_mask = None 
+        # 注册因果掩码下三角矩阵,用于单向注意力如GPT,persistent=False表示不保存到模型权重
+        # 将掩码注册为模型的缓冲区(非可训练参数),但会随模型设备迁移
+        else: self.register_buffer('attn_mask', self.build_causal_mask(), persistent=False)
+
+        if proj_type == 'none' or not output_dim:
+            self.text_projection = None
+        else:
+            if proj_bias : self.text_projection = nn.Linear(width, output_dim)
+            else: self.text_projection = nn.Parameter(torch.empty(width, output_dim))
+        self.init_parameters()
+    def init_parameters(self,)->None:
+        """完成参数注册对于不同的参数层进行参数注册"""
+        # 基本的词嵌入层的参数初始化
+        nn.init.normal_(self.token_embedding.weight, std=0.02)
+        nn.init.normal_(self.positional_embedding, std=0.01)
+        if self.cls_emb is not None:
+            nn.init.normal_(self.cls_emb, std=0.01)
+        # 对transformer的参数进行初始化: 参数初始化方差与维度成反比!!
+        proj_std = (self.transformer.width ** -0.5) * ((2*self.transformer.layers) ** -0.5)
+        attn_std = self.trabsformer.width ** -0.5
+        fc_std = (2 * self.transformer.width) ** -0.5
+        # 初始化transformer内部的Resblocks层的参数配置
+        for block in self.transforme.resblocks:
+            nn.init.normal_(block.attn.in_proj_weight, std=attn_std)
+            nn.init.normal_(block.attn.out_proj.weight, std=proj_std)
+            nn.init.normal_(block.mlp.c_fc.weight, std=fc_std)
+            nn.init.normal_(block.mlp.c_proj.weight, std=proj_std)
+        # 初始化最后的文本投影层的参数
+        if self.text_projtection is not None:
+            if isinstance(self.text_projection, nn.Linear):
+                nn.init.normal_(self.text_projection.weight, std=proj_std)
+                if self.text_projection.bias is not None:
+                    nn.init.zeros_(self.text_projection.bias)
+            else: nn.init.normal_(self.text_projection, std=proj_std)
+    @torch.jit.ignore
+    def set_grad_checkpointing(self, enable=True):
+        """激活transformer的梯度检查点权重grad_checkpointing以节省显存,但会减慢训练速度"""
+        self.transformer.grad_checkpointing = enable
+    def lock(self, unlocked_layers: int=0, freeze_layer_norm: bool=True):
+        """随机固定部分层的参数"""
+        assert freeze_layer_norm, "[WARNING] 锁住层norm层!"
+        lock_text_tower(self, unlocked_layers)
+    @torch.jit.ignore
+    def no_weight_decay(self,):
+        # 对于timm优化器,默认会排除一维参数,如
+        # logit_scale、logit_bias、ln/bn 尺度参数、偏置参数等
+        no_wd = {'positional_embedding'}
+        if self.cls_emb is not None: no_wd.add('cls_emb')
+        return no_wd
+    def build_causal_mask(self,):
+        # 惰性创建因果注意力掩码，使标记之间具有完全注意力
+        # PyTorch 使用加性注意力掩码；用负无穷填充
+        mask = torch.empty(self.num_pos, self.num_pos)
+        # 构造上三角的mask,并将下三角清零
+        mask.fill_(float('-inf'))
+        mask.triu_(1) 
+        return mask
+    def _build_additive_mask(self, text:torch.Tensor,
+                             seq_len: int, # [B, L]–尚未包含CLS的原始文本ID
+                             dtype: torch.dtype, # L (+1 if CLS added)
+                             )->torch.Tensor:
+        """"""
+        
+
+
+
+
+def lock_text_tower(model: nn.Module,
+                    unlocked_layers: int=0):
+    """锁定 CLIP 模型的文本塔层,适用于两种模型架构：
+    CustomTextCLIP,其中文本组件位于 self.text 中
+    标准 CLIP,其中文本组件被解包为属性
+    model CLIP 模型或 TextTransformer 模块
+    unlocked_layers要保持未锁定的层数(从末尾开始数)"""
+    if hasattr(model, 'text'): 
+        # 自定义文本CLIP或已有的具有嵌套结构的文本转换器TextTransformer
+        text_module = model.text
+    else: 
+        # 标准的CLIP的实现或者单向的transformer
+        text_module = model
+    # 收集text 组件的参数并过滤value=None的情况
+    text_params = {}
+    text_params['token_embedding'] = getattr(text_module, 'token_embedding', None)
+    text_params['positional_embedding'] = getattr(text_module, 'positional_embeding', None)
+    text_params['cls_emb'] = getattr(text_module, 'cls_emb', None)
+    text_params['transformer'] = getattr(text_module, 'transformer', None)
+    text_params['ln_final'] = getattr(text_module, 'ln_final', None)
+    text_params['text_projection'] = getattr(text_module, 'text_projection', None)
+    text_params = {k:v for k,v in text_params.items() if v is not None}
+    # 首先冻结所有text_params参数:分为单层和modules
+    for module in text_params.values():
+        if isinstance(module, nn.Parameter):
+            module.requires_grad = False
+        elif isinstance(module, nn.Module):
+            for param in module.parameters():
+                param.requires_grad = False
+    # 排除特殊情况进行回退,检查是否存在transformer的resblocks的参数块
+    if unlocked_layers == 0: return
+    Transformer = text_params['transformer']
+    if not Transformer or not hasattr(Transformer, 'resblocks'): return
+    total_resblocks_layers = len(Transformer.resblocks)
+    if total_resblocks_layers == 0: return
+    # 构建不被冻结的参数层
+    groups = []
+    # Group 1: Embeddings
+    embedding_group = []
+    for key in ['token_embedding', 'positional_embedding', 'cls_emb']:
+        if key in text_params:
+            embedding_group.append(text_params[key])
+    if embedding_group: groups.append(embedding_group)
+    # Group 2-N: Individual transformer blocks (except last)
+    if total_resblocks_layers > 1:
+        for block in Transformer.resblocks[:-1]:
+            groups.append([block])
+    # Group 3: 将最后一个Transformer块和最终的层归一化合并为倒数第二个组
+    last_block = [Transformer.resblocks[-1]]
+    if 'ln_final' in text_params:
+        last_block.append(text_params['ln_final'])
+    groups.append(last_block)
+    # Group 4: Projection layer
+    if 'text_projection' in text_params:
+        groups.append(text_params['text_projection'])
+    def _unlock(group):
+        """辅助函数帮助解冻参数组中的参数"""
+        if isinstance(group, Sequence):
+            for m in group: _unlock(m)
+        elif isinstance(group, nn.Parameter):
+            module.requires_grad = True
+        elif isinstance(group, nn.Module):
+            for name, param in module.named_parameters():
+                param.requires_grad = True
+    # 从末尾解锁指定数量的图层组groups
+    num_groups_to_unlock = min(unlocked_layers, len(groups))
+    for group in groups[-num_groups_to_unlock:]:
+        _unlock(group)
 

@@ -47,6 +47,12 @@
 [submodule "dl_exam/nlp/clones/LLaVA-RLHF"]
 	path = dl_exam/nlp/clones/LLaVA-RLHF
 	url = https://github.com/llava-rlhf/LLaVA-RLHF.git
+[submodule "dl_exam/nlp/clones/FasterTransformer"]
+	path = dl_exam/nlp/clones/FasterTransformer
+	url = https://github.com/ImanHosseini/FasterTransformer.git
+[submodule "dl_exam/nlp/clones/UER-py"]
+	path = dl_exam/nlp/clones/UER-py
+	url = https://github.com/dbiir/UER-py.git
 
 
 # For RL
