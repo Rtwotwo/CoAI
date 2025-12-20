@@ -1,7 +1,9 @@
 """
 Modified By: Redal
 Date: 2025-12-20
-Todo: 
+Todo: 用于 CLIP(Contrastive Language-Image Pretraining)模型在
+      ImageNet 数据集上进行零样本分类(zero-shot classification)
+      时的标准提示工程(Prompt Engineering)实现
 Homepage: https://github.com/Rtwotwo/Code-Exam.git
 """
 OPENAI_IMAGENET_TEMPLATES = (
