@@ -70,5 +70,56 @@ classDiagram
     CLIP *-- "1" Transformer : text transformer
     CLIP *-- "1" LayerNorm : ln_final
 ```
+
 ## :house:2.CLIP_Latest Architecture:house:
 
+The construction process of [MultimodalTransformer](dl_exam/vlm/clip_latest/transformer.py) takes the standard Transformer encoder as its core framework, and realizes cross-modal interaction through multi-layer stacked ResidualAttentionBlocks. Each ResidualAttentionBlock contains a custom Attention module (supporting cross-attention mechanism for fusing image and text features), a feed-forward network MLP driven by the [QuickGELU](dl_exam/base/utils/activation.py) activation function, and an optional high-precision normalization layer LayerNormFp32 to stabilize the training process. The entire Transformer body is encapsulated in the MultimodalTransformer class, which is responsible for receiving embedding sequences from the visual encoder and text encoder. Under the iterative action of multi-layer residual attention blocks, it gradually aligns and fuses the semantic information of the two modalities, and finally outputs a joint multimodal representation, thereby realizing the modeling of deep semantic association between images and texts.
+
+```mermaid
+classDiagram
+
+    %% ==================== 核心类 ====================
+    class MultimodalTransformer {
+        +__init__(width, layers, heads, context_length, mlp_ratio, ls_init value, act_layer, norm_layer, output_dim, batch_first)
+        +forward(img_embs, text_embs) Tensor
+    }
+
+    class Transformer {
+        +__init__(width, layers, heads, mlp_ratio, ls_init_value, act_layer, norm_layer, batch_first, block_type)
+        +forward(x, attn_mask) Tensor
+        +forward_intermediates(...) Tuple[Tensor, List[Tensor]]
+    }
+
+    class ResidualAttentionBlock {
+        +__init__(d_model, n_head, mlp_ratio, ls_init_value, act_layer, norm_layer, is_cross_attention, batch_first)
+        +forward(q_x, k_x, v_x, attn_mask) Tensor
+    }
+
+    class Attention {
+        +__init__(dim, num_heads, qkv_bias, qk_norm, scaled_cosine, scale_heads, inner_norm, norm_layer, attn_drop, proj_drop)
+        +forward(x: Tensor, attn_mask) Tensor
+    }
+
+    class LayerNormFp32 {
+        +forward(x: Tensor) Tensor
+    }
+
+    class QuickGELU {
+        +forward(x: Tensor) Tensor
+    }
+
+    class MLP {
+        +__init__(in_features, hidden_features, out_features, act_layer, drop)
+        +forward(x: Tensor) Tensor
+    }
+
+    %% ==================== 组合关系 ====================
+    MultimodalTransformer "1" *-- "1" Transformer : contains
+    Transformer "1" *-- "layers" ResidualAttentionBlock : contains
+    ResidualAttentionBlock "1" *-- "1" Attention : uses
+    ResidualAttentionBlock "1" *-- "1" MLP : uses
+    ResidualAttentionBlock "1" *-- "1" LayerNormFp32 : optional ln_q/ln_k
+    ResidualAttentionBlock "1" *-- "1" QuickGELU : in MLP
+    Attention "1" *-- "1" LayerNormFp32 : for query/key normalization (optional)
+    Attention "1" *-- "1" QuickGELU : in attention projection
+```

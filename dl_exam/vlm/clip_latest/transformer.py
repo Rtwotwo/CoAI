@@ -1,11 +1,3 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
-# --------------------------------------------------------
-# Position embedding utils
-# --------------------------------------------------------
 """
 Modified By: Redal
 Date: 2025-12-03
@@ -1099,19 +1091,164 @@ class TextTransformer(nn.Module):
     def forward_intermediates(self, text:torch.Tensor,
                               indices: Optional[Union[int, List[int]]]=None,
                               stop_early: bool = False,
-                              normalize_inermediates: bool=False,
+                              normalize_intermediates: bool=False,
                               intermediates_only: bool=False,
                               output_fmt: str= 'NCHW',
-                              output_extra_token: bool=False,
+                              output_extra_tokens: bool=False,
                               )->Dict[str, Union[torch.Tensor, List[torch.Tensor]]]:
         """文本编码器:不仅返回最终的文本特征，还返回 Transformer各层的中间特征
         裁剪掉Transformer中不需要的层,同时可选裁剪归一化层和投影头"""
-        
+        assert output_fmt in ('NLC',), 'Output format must be NLC.'
+        # forward pass
+        x, attn_mask = self._embeds(text)
+        x, intermediates = self.transformer.forward_intermediates(x,
+                                                attn_mask=attn_mask,
+                                                indices=indices,
+                                                stop_early=stop_early,)
+        # process intermediates
+        if normalize_intermediates:
+            # apply final norm to all intermediates
+            intermediates = [self.ln_final(xi) for xi in intermediates]
+        output = {}
+        if self.cls_emb is not None:
+            # 将拼接的类别标记与序列分离
+            seq_intermediates = [xi[:, :-1] for xi in intermediates]  
+            if output_extra_tokens:
+                # return suffix class tokens separately
+                cls_intermediates = [xi[:, -1:] for xi in intermediates]
+                output['text_intermediates_suffix'] = cls_intermediates
+            intermediates = seq_intermediates
+        output['text_intermediates'] = intermediates
+        if intermediates_only: return output
 
-        
+        if self.cls_emb is not None:
+            # 附加的 cls 嵌入（CoCa）的存在会覆盖池化类型，始终采用最后一个标记
+            pooled = text_global_pool(x, pool_type='last')
+            pooled = self.ln_final(pooled)  # final LN applied after pooling in this case
+        else:
+            x = self.ln_final(x)
+            pooled = text_global_pool(x, text, pool_type=self.pool_type, 
+                                      eos_token_id=getattr(self, "eos_id", None))
+        if self.text_projection is not None:
+            if isinstance(self.text_projection, nn.Linear):
+                pooled = self.text_projection(pooled)
+            else:
+                pooled = pooled @ self.text_projection
+        output['text_features'] = pooled
+        return output
+    def prune_intermediate_layers(self, indices: Union[int, List[int]],
+                                  prune_norm: bool = False,
+                                  prune_head: bool = True,):
+        """修剪对于指定中间特征不需要的层"""
+        take_indices = self.transformer.prune_intermediate_layers(indices)
+        if prune_norm: self.ln_post = nn.Identity()
+        if prune_head: self.proj = None
+        return take_indices
+    def forward(self, x: torch.Tensor):
+        x = self._embed(x)
+        x = self.transformer(x)
+        pooled, tokens = self._pool(x)
+        if self.proj is not None: pooled = pooled @ self.proj
+        if self.output_tokens: return pooled, tokens
+        return pooled
+    
 
-
-
+class MultimodalTransformer(nn.Module):
+    """多模态Transformer(MultimodalTransformer)类,继承自基础Transformer类,
+    核心是在基础Transformer架构上扩展了交叉注意力(Cross-Attention)能力,
+    专门用于处理多模态数据(如文本+图像/文本+音频等)的融合任务,常见于CLIP/BLIP等多模态模型中"""
+    def __init__(self, width: int,
+                 layers: int,
+                 heads: int,
+                 context_length: int=77,
+                 mlp_ratio: float=4.0,
+                 ls_init_value: float=None,
+                 act_layer: Type[nn.Module]=nn.GELU,
+                 norm_layer: Type[nn.Module]=LayerNorm,
+                 output_dim: int=512,
+                 batch_first: bool=True
+                 )->None:
+        # 初始化参数与父类继承
+        super().__init__(
+                width=width,
+                layers=layers,
+                heads=heads,
+                mlp_ratio=mlp_ratio,
+                ls_init_value=ls_init_value,
+                act_layer=act_layer,
+                norm_layer=norm_layer,
+                batch_first=batch_first,)
+        # 交叉注意力层(cross_attn)允许一种模态的特征作为键和值,另一种模态的特征作为查询
+        # 区别于自注意力仅在单一模态内部做注意力计算,其Q,K,V的计算都是基于同一模态的输入特征
+        self.context_length = context_length
+        self.cross_attn = nn.ModuleList([
+                ResidualAttentionBlock(
+                        width,
+                        heads,
+                        mlp_ratio,
+                        ls_init_value=ls_init_value,
+                        act_layer=act_layer,
+                        norm_layer=norm_layer,
+                        is_cross_attention=True,
+                        batch_first=batch_first,)
+                for _ in range(layers)])
+        # 通过register_buffer注册一个非可训练的缓冲区attn_mask,由build_attention_mask()生成
+        self.register_buffer('attn_mask', self.build_attention_mask(), persistent=False)
+        self.ln_final = LayerNorm(width)
+        self.text_projection = nn.Parameter(torch.empty(width, output_dim))
+    @torch.jit.ignore
+    def set_grad_checkpointing(self, enable:bool=True):
+        """激活梯度检查点"""
+        self.grad_checkpointing = enable
+    def init_parameters(self,)->None:
+        """激活各个组件的参数初始化包括:transformer的resblock,corss_attn,text_projection"""
+        proj_std = (self.transformer.width ** -0.5) * ((2 * self.transformer.layers) ** -0.5)
+        attn_std = self.transformer.width ** -0.5
+        fc_std =(2 * self.transformer.width) ** -0.5
+        for block in self.transformer.resblocks:
+            nn.init.normal_(block.attn.in_proj_weight, std=attn_std)
+            nn.init.normal_(block.attn.out_proj.weight, std=proj_std)
+            nn.init.normal_(block.mlp.c_fc.weight, std=fc_std)
+            nn.init.normal_(block.mlp.c_proj.weight, std=proj_std)
+        for block in self.transformer.cross_attn:
+            nn.init.normal_(block.attn.in_proj_weight, std=attn_std)
+            nn.init.normal_(block.attn.out_proj.weight, std=proj_std)
+            nn.init.normal_(block.mlp.c_fc.weight, std=fc_std)
+            nn.init.normal_(block.mlp.c_proj.weight, std=proj_std)
+        if self.text_projection is not None:
+            nn.init.normal_(self.text_projection, std=self.transformer.width ** -0.5)
+    def build_attention_mask(self,):
+        """创建因果掩码,在全注意力阶段的处理中,同时pytorch一般使用addtive mask"""
+        mask = torch.empty(self.context_length, self.context_length)
+        mask.fill_(float('-inf'))
+        mask.triu_(1)
+        return mask 
+    def forward_intermediates(self, x: torch.Tensor,
+                              text: Optional[torch.Tensor]=None,
+                              indices: Optional[Union[int, List[int]]]=None,
+                              stop_early: bool=False):
+        assert False, f"[WARNING] 后续补上关于MultimodalTransformer的forward_intermediates方法"
+    def forward(self, img_embs, text_embs):
+        """文本嵌入text_embs与图像嵌入image_embs的交叉注意力交互"""
+        seq_len = text_embs.shape[1]
+        if not self.batch_first:
+            image_embs = img_embs.permute(1, 0, 2) # NLD -> LND
+            text_embs = text_embs.permute(1, 0, 2) # NLD -> LND
+        # 残差块与交叉注意力的迭代计算
+        for resblock, cross_attn in zip(self.resblocks, self.cross_attn):
+            if self.grad_checkpointing and not torch.jit.is_scripting():
+                image_embs = checkpoint(resblock, text_embs, None, None, self.attn_mask[:seq_len, :seq_len], use_reentrant=False)
+                image_embs = checkpoint(cross_attn, text_embs, image_embs, image_embs, None, use_reentrant=False)
+            else:
+                text_embs = resblock(text_embs, attn_mask=self.attn_mask[:seq_len, :seq_len])
+                text_embs = cross_attn(text_embs, k_x=image_embs, v_x=image_embs)
+        if not self.batch_first:
+            text_embs = text_embs.transpose(0, 1) # LND -> NLD
+        out = self.ln_final(text_embs)
+        if self.text_projection is not None:
+            out = out @ self.text_projection
+        return out
+    
 
 def lock_text_tower(model: nn.Module,
                     unlocked_layers: int=0):

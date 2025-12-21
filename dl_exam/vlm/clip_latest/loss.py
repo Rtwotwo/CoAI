@@ -1,14 +1,8 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
-# --------------------------------------------------------
-# Position embedding utils
-# --------------------------------------------------------
 """
 Modified By: Redal
 Date: 2025-12-03
-Todo: 
+Todo: 通过拉近匹配的图像-文本对的特征表示,推开不匹配的对,
+      从而学习到对齐的跨模态语义空间,用于对比学习(Contrastive Learning)
+      的损失函数,主要用于图文多模态预训练模型(如CLIP/CoCa/SigLIP 等)
 Homepage: https://github.com/Rtwotwo/Code-Exam.git
 """
