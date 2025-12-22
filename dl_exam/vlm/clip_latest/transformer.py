@@ -223,6 +223,7 @@ class Attention(nn.Module):
                 attn_mask:Optional[torch.Tensor]
                 )->torch.Tensor:
         N, L, C = x.shape
+        # Transformer注意力机制中,对输入特征x进行Query,Key,Value的线性投影与拆分,MHA的关键步骤
         q, k, v = F.linear(x, self.in_proj_weight, self.in_proj_bias).chunk(3, dim=-1)
         q = q.view(N, L, self.num_heads, -1).transpose(1, 2)
         k = k.view(N, L, self.num_heads, -1).transpose(1, 2)

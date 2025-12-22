@@ -86,6 +86,9 @@
 [submodule "dl_exam/vlm/clones/VLM-R1"]
 	path = dl_exam/vlm/clones/VLM-R1
 	url = https://github.com/om-ai-lab/VLM-R1.git
+[submodule "dl_exam/vlm/clones/CoCa-pytorch"]
+	path = dl_exam/vlm/clones/CoCa-pytorch
+	url = https://github.com/lucidrains/CoCa-pytorch.git
 
 
 # For VLA
@@ -101,6 +104,3 @@
 [submodule "dl_exam/vla/clones/openvla-oft"]
 	path = dl_exam/vla/clones/openvla-oft
 	url = https://github.com/moojink/openvla-oft
-[submodule "dl_exam/vlm/clones/CoCa-pytorch"]
-	path = dl_exam/vlm/clones/CoCa-pytorch
-	url = https://github.com/lucidrains/CoCa-pytorch.git

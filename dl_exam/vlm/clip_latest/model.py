@@ -1,11 +1,3 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
-# --------------------------------------------------------
-# Position embedding utils
-# --------------------------------------------------------
 """
 Modified By: Redal
 Date: 2025-12-03
@@ -42,7 +34,7 @@ from .transformer import (LayerNormFp32, LayerNorm,
 
 
 @dataclass
-class CLIPConfig:
+class CLIPVisionCfg:
     layers: Union[Tuple[int, int, int, int], int] = 12
     width: int = 768
     head_width: int = 64
@@ -80,7 +72,72 @@ class CLIPConfig:
     timm_drop: float = 0.  # head dropout
     timm_drop_path: Optional[float] = None  # backbone stochastic depth
 
+
 @dataclass 
 class CLIPTextCfg:
     context_length: int = 77
-    
+    vocab_size: int = 49408
+    hf_tokenizer_name: Optional[str] = None
+    tokenizer_mode: Optional[str] = None
+    tokenizer_kwargs: Optional[dict] = None
+
+    width: int = 512
+    heads: int = 8
+    layers: int = 12
+    mlp_ratio: float = 4.0
+    ls_init_value: Optional[float] = None  # layer scale initial value
+    embed_cls: bool = False
+    pad_id: int = 0
+    eos_id: int = 2  # only used for when pool_type == 'eos', must match tokenizer eos
+    no_causal_mask: bool = False  # disable causal masking
+    final_ln_after_pool: bool = False  # apply final LayerNorm after pooling
+    pool_type: str = 'argmax'
+    proj_bias: bool = False
+    proj_type: str = 'linear'  # control final text projection, 'none' forces no projection
+    output_tokens: bool = False
+    act_kwargs: dict = None
+    norm_kwargs: dict = None
+
+    # Custom attention block settings
+    block_type: Optional[str] = None  # attention block type ('default', 'custom'), auto-selects 'custom' if any custom features enabled
+    qk_norm: bool = False  # apply layer norm to q and k in attention
+    scaled_cosine_attn: bool = False  # use scaled cosine attention
+    scale_heads: bool = False  # learnable head-specific scale applied to attention logits
+    scale_attn_inner: bool = False  # apply layer norm on attention context, before output projection
+    scale_attn: bool = False  # apply layer norm after full attention block
+    scale_fc: bool = False  # apply layer norm in MLP block
+
+    # HuggingFace specific text tower config
+    hf_model_name: Optional[str] = None
+    hf_model_pretrained: bool = True
+    hf_proj_type: str = 'mlp'
+    hf_pooler_type: str = 'mean_pooler'  # attentional pooling for HF models
+
+
+def get_cast_dtype(precision: str):
+    """根据输入的精度字符串,返回对应的PyTorch数据类型对象,
+    用于后续张量的数据类型转换cast操作"""
+    cast_dtype = None
+    if precision == 'bf16':
+        cast_dtype = torch.bfloat16
+    elif precision == 'fp16':
+        cast_dtype = torch.float16
+    return cast_dtype
+
+
+def get_input_dtype(precision: str):
+    """根据输入的精度字符串precision,映射返回对应的PyTorch数据类型,
+    本质是实现字符串到 PyTorch dtype 的枚举映射逻辑"""
+    input_dtype = None
+    if precision in ['bf16', 'pure_bf16']:
+        input_dtype = torch.bfloat16
+    elif precision in ['fp16', 'pure_fp16']:
+        input_dtype = torch.float16
+    return input_dtype
+
+
+def _build_vision_tower(embed_dim: int,
+                        vision_cfg: CLIPVisionCfg,
+                        quick_gelu: bool=False,
+                        cast_dtype: Optional[torch.dtype]=None):
+    """"""
