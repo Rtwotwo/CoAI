@@ -101,3 +101,6 @@
 [submodule "dl_exam/vla/clones/openvla-oft"]
 	path = dl_exam/vla/clones/openvla-oft
 	url = https://github.com/moojink/openvla-oft
+[submodule "dl_exam/vlm/clones/CoCa-pytorch"]
+	path = dl_exam/vlm/clones/CoCa-pytorch
+	url = https://github.com/lucidrains/CoCa-pytorch.git
