@@ -140,4 +140,12 @@ def _build_vision_tower(embed_dim: int,
                         vision_cfg: CLIPVisionCfg,
                         quick_gelu: bool=False,
                         cast_dtype: Optional[torch.dtype]=None):
-    """"""
+    """为CLIP类模型(图文对比学习模型)搭建视觉特征提取网络
+    支持多种视觉骨干网络的灵活选择与配置"""
+    if isinstance(vision_cfg, dict): 
+        vision_cfg = CLIPVisionCfg(**vision_cfg)
+    # OpenAI使用QuickGELU作为预训练的激活函数,但是原生的GELU更快更好
+    # 在timm model中也是经常使用原生的GELU进行处理而非quickGELU
+    act_layer = QuickGELU if quick_gelu else nn.GELU
+    if vision_cfg.timm_model_name:
+        visual = TimmModel
