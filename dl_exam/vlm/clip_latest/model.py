@@ -148,4 +148,4 @@ def _build_vision_tower(embed_dim: int,
     # 在timm model中也是经常使用原生的GELU进行处理而非quickGELU
     act_layer = QuickGELU if quick_gelu else nn.GELU
     if vision_cfg.timm_model_name:
-        visual = TimmModel
+        visual = TimmModel()
