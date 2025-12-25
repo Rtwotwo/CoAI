@@ -140,13 +140,148 @@ def _build_vision_tower(embed_dim: int,
                         vision_cfg: CLIPVisionCfg,
                         quick_gelu: bool=False,
                         cast_dtype: Optional[torch.dtype]=None):
-    """为CLIP类模型(图文对比学习模型)搭建视觉特征提取网络
-    支持多种视觉骨干网络的灵活选择与配置"""
+    """为CLIP类模型(图文对比学习模型)搭建视觉特征提取网络支持多种视觉骨干网络的灵活选择与配置
+    初始化vision_tower的模块根据实际情况选择timm_model/ModifiedResNet/VisionTransformer"""
     if isinstance(vision_cfg, dict): 
         vision_cfg = CLIPVisionCfg(**vision_cfg)
     # OpenAI使用QuickGELU作为预训练的激活函数,但是原生的GELU更快更好
     # 在timm model中也是经常使用原生的GELU进行处理而非quickGELU
     act_layer = QuickGELU if quick_gelu else nn.GELU
+    # 初始化vision_tower的模块根据实际情况选择timm_model/ModifiedResNet/VisionTransformer
     if vision_cfg.timm_model_name:
-        visual = TimmModel()
+        visual = TimmModel(
+                    vision_cfg.timm_model_name,
+                    embed_dim=embed_dim,
+                    image_size=vision_cfg.image_size,
+                    pool=vision_cfg.timm_pool,
+                    proj=vision_cfg.timm_proj,
+                    proj_bias=vision_cfg.timm_proj_bias,
+                    drop=vision_cfg.timm_drop,
+                    drop_path=vision_cfg.timm_drop_path,
+                    patch_drop=vision_cfg.timm_drop_path,
+                    pretrained=vision_cfg.timm_model_pretrained,)
+    elif isinstance(vision_cfg, (tuple, list)):
+        vision_heads = vision_cfg.width * 32 // vision_cfg.head_width
+        visual = ModifiedResNet(
+                    layers=vision_cfg.layers,
+                    output_dim=embed_dim,
+                    heads=vision_heads,
+                    image_size=vision_cfg.image_size,
+                    width=vision_cfg.width)
+    else:
+        vision_heads = vision_cfg.width // vision_cfg.head_width
+        norm_layer = LayerNormFp32 if cast_dtype in (torch.float16, torch.bfloat) else LayerNorm
+        # 使用partial避免重复参数注册
+        if vision_cfg.norm_kwargs:
+            norm_layer = partial(norm_layer, **vision_cfg.norm_kwargs)
+        if vision_cfg.act_kwargs is not None:
+            act_layer = partial(act_layer, **vision_cfg.act_kwargs)
+        visual = VisionTransformer( 
+                    image_size=vision_cfg.image_size,
+                    patch_size=vision_cfg.patch_size,
+                    width=vision_cfg.width,
+                    layers=vision_cfg.layers,
+                    heads=vision_heads,
+                    mlp_ratio=vision_cfg.mlp_ratio,
+                    ls_init_value=vision_cfg.ls_init_value,
+                    patch_dropout=vision_cfg.patch_dropout,
+                    attentional_pool=vision_cfg.attentional_pool,
+                    attn_pooler_queries=vision_cfg.attn_pooler_queries,
+                    attn_pooler_heads=vision_cfg.attn_pooler_heads,
+                    pos_embed_type=vision_cfg.pos_embed_type,
+                    no_ln_pre=vision_cfg.no_ln_pre,
+                    final_ln_after_pool=vision_cfg.final_ln_after_pool,
+                    pool_type=vision_cfg.pool_type,
+                    output_tokens=vision_cfg.output_tokens,
+                    output_dim=embed_dim,
+                    act_layer=act_layer,
+                    norm_layer=norm_layer,
+                    block_type=vision_cfg.block_type,
+                    qk_norm=vision_cfg.qk_norm,
+                    scaled_cosine_attn=vision_cfg.scaled_cosine_attn,
+                    scale_heads=vision_cfg.scale_heads,
+                    scale_attn_inner=vision_cfg.scale_attn_inner,
+                    scale_attn=vision_cfg.scale_attn,
+                    scale_fc=vision_cfg.scale_fc,)
+    return visual
+
+
+def _build_text_tower(embed_dim: int,
+                      text_cfg:CLIPTextCfg,
+                      quick_gelu: bool=False,
+                      cast_dtype: Optional[torch.dtype]=None):
+    """构建文本编码塔(Text Encoder Tower)的核心函数
+    根据text_cfg决定使用hf_model/TextTransformer"""
+    if isinstance(text_cfg, dict):
+        text_cfg = CLIPTextCfg(**text_cfg)
+    if text_cfg.hf_model_name:
+        text = HFTextEncoder(
+                    text_cfg.hf_model_name,
+                    output_dim=embed_dim,
+                    pooler_type=text_cfg.hf_pooler_type,
+                    proj_type=text_cfg.hf_proj_type,
+                    pretrained=text_cfg.hf_model_pretrained,
+                    output_tokens=text_cfg.output_tokens)
+    else:
+        act_layer = QuickGELU if quick_gelu else nn.GELU
+        norm_layer = LayerNormFp32 if cast_dtype in (torch.float16, torch.bfloat16) else LayerNorm
+        if text_cfg.norm_kwargs:
+            norm_layer = partial(norm_layer, **text_cfg.norm_kwargs)
+        if text_cfg.act_kwargs is not None:
+            act_layer = partial(act_layer, **text_cfg.act_kwargs)
+        text = TextTransformer(
+                    context_length=text_cfg.context_length,
+                    vocab_size=text_cfg.vocab_size,
+                    width=text_cfg.width,
+                    heads=text_cfg.heads,
+                    layers=text_cfg.layers,
+                    mlp_ratio=text_cfg.mlp_ratio,
+                    ls_init_value=text_cfg.ls_init_value,
+                    output_dim=embed_dim,
+                    embed_cls=text_cfg.embed_cls,
+                    no_causal_mask=text_cfg.no_causal_mask,
+                    pad_id=text_cfg.pad_id,
+                    eos_id=text_cfg.eos_id,
+                    pool_type=text_cfg.pool_type,
+                    proj_type=text_cfg.proj_type,
+                    proj_bias=text_cfg.proj_bias,
+                    output_tokens=text_cfg.output_tokens,
+                    act_layer=act_layer,
+                    norm_layer=norm_layer,
+                    block_type=text_cfg.block_type,
+                    qk_norm=text_cfg.qk_norm,
+                    scaled_cosine_attn=text_cfg.scaled_cosine_attn,
+                    scale_heads=text_cfg.scale_heads,
+                    scale_attn_inner=text_cfg.scale_attn_inner,
+                    scale_attn=text_cfg.scale_attn,
+                    scale_fc=text_cfg.scale_fc,)
+    return text
     
+
+class CLIP(nn.Module):
+    """"""
+    output_dict: torch.jit.Final[bool]
+    def __in__(self, 
+               embed_dim:int,
+               vision_cfg: CLIPVisionCfg,
+               text_cfg: CLIPTextCfg,
+               quick_gelu: bool=False,
+               init_logit_scale: float=np.log(1/0.07),
+               init_logit_bias: Optional[float]=None,
+               nonscalar_logit_scale: bool=False,
+               cast_dtype: Optional[torch.dtype]=None,
+               output_dict: bool=False
+               )->None:
+        super().__init__()
+        self.output_dict = output_dict
+        self.visual = _build_vision_tower(embed_dim=embed_dim,
+                                          vision_cfg=vision_cfg,
+                                          quick_gelu=quick_gelu,
+                                          cast_dtype=cast_dtype)
+        self.text = _build_text_tower(embed_dim=embed_dim,
+                                      text_cfg=text_cfg,
+                                      quick_gelu=quick_gelu,
+                                      cast_dtype=cast_dtype)
+        self.transformer = self.text.transformer
+        
+

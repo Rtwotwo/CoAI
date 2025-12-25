@@ -80,14 +80,26 @@ def _token_to_tensor(token_id, device:str='cpu')->torch.Tensor:
 
 
 class CoCa(nn.Module):
-     def __init__(self, 
+      def __init__(self, 
                   embed_dim,
                   multimodal_cfg: MultimodalCfg,
                   text_cfg: CLIPTextCfg,
                   vision_cfg: CLIPVisionCfg,
                   quick_gelu: bool=False,
                   init_logit_scale: float = np.log(1/0.07),
-                  
-                  )
+                  init_logit_bias: Optional[float]=None,
+                  nonscalar_logit_scale: bool=False,
+                  cast_dtype: Optional[torch.dtype]=None,
+                  pad_id: int=0,
+                  )->None:
+            super().__init__()
+            multimodal_cfg = MultimodalCfg(**multimodal_cfg) if isinstance(multimodal_cfg, dict) else multimodal_cfg
+            text_cfg = CLIPTextCfg(**text_cfg) if isinstance(text_cfg, dict) else text_cfg
+            vision_cfg = CLIPVisionCfg(**vision_cfg) if isinstance(vision_cfg, dict) else vision_cfg
+            # 实例化text_tower, vision_tower, text_decoder_tower
+            self.text = _build_text_tower()
+            self.visual = _build_vision_tower()
+            self.text_decoder = _build_text_decoder_tower()
+
 
 
