@@ -149,3 +149,4 @@ def _build_vision_tower(embed_dim: int,
     act_layer = QuickGELU if quick_gelu else nn.GELU
     if vision_cfg.timm_model_name:
         visual = TimmModel()
+    

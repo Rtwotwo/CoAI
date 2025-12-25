@@ -1,7 +1,7 @@
 """
 Modified By: Redal
 Date: 2025-12-20
-Todo: 
+Todo: 把OpenCLIP或CLIP变种项目里所有魔法数字和文件名集中放置
 Homepage: https://github.com/Rtwotwo/Code-Exam.git
 """
 OPENAI_DATASET_MEAN = (0.48145466, 0.4578275, 0.40821073)
