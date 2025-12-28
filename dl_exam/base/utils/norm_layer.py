@@ -243,6 +243,7 @@ class SyncBatchNorm(nn.Module):
         shape = [1] * x.dim()
         shape[1] = self.num_features
         # 根据training和track_running_stats参数,进行BN计算
+        # 便于后续计算factor因子,以更新running_mean和running_var
         if self.training and self.track_running_stats:
             if self.num_batches_tracked is not None:
                 self.num_batches_tracked.add_(1)
@@ -309,5 +310,22 @@ class SyncBatchNormFp32(SyncBatchNorm):
             return super().forward(x)
 
 
+class ScaleNorm(nn.Module):
+    """ScaleNorm是一种简化的归一化方法,使用可学习的缩放参数进行归一化
+    与LayerNorm不同,ScaleNorm不需要学习均值和方差参数,仅使用L2范数进行归一化
+    SN(x) = gamma * x / sqrt(sum(x^2, dim=-1, keepdim=True) + eps)
+    dim: 归一化的维度,通常为特征维度; eps: 防止除零的小常数
+    clamp_min: 可选的最小值限制，防止梯度爆炸"""
+    def __init__(self, dim:int,
+                 eps: float=1e-5,
+                 clamp_min: float=1e-2,
+                 device=None,
+                 dtype=None
+                 )->None:
+        super().__init__()
+
+
+class GroupNorm(nn.Module):
+    """"""
 
 

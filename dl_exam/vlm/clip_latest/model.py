@@ -259,7 +259,6 @@ def _build_text_tower(embed_dim: int,
     
 
 class CLIP(nn.Module):
-    """"""
     output_dict: torch.jit.Final[bool]
     def __in__(self, 
                embed_dim:int,
@@ -282,6 +281,124 @@ class CLIP(nn.Module):
                                       text_cfg=text_cfg,
                                       quick_gelu=quick_gelu,
                                       cast_dtype=cast_dtype)
+        # 初始化text的模型参数
         self.transformer = self.text.transformer
-        
+        self.context_length = self.text.context_length
+        self.vocab_size = self.text.vocab_size
+        self.token_embedding = self.text.token_embedding
+        self.positional_embedding = self.text.positional_embedding
+        self.ln_final = self.text.ln_final
+        self.text_projection = self.text.text_projection
+        self.text_pool_type = self.text.pool_type
+        self.test_eos_id = self.text.eos_id
+        # 注册模型的非可训练缓冲区,不参与梯度更新
+        self.register_buffer('attn_mask', self.text.attn_mask, persistent=False)
+        # 对比学习对数尺度/偏置参数初始化
+        lshape = [1] if nonscalar_logit_scale else []
+        self.logit_scale = nn.Parameter(torch.ones(lshape) * init_logit_scale)
+        if init_logit_scale is not None:
+            self.logit_bias = nn.Parameter(torch.ones(lshape) * init_logit_bias)
+        else: self.logit_bias = None
+    def lock_image_tower(self, unlocked_groups=0, freeze_bn_stats=False):
+        """按照LiT锁定图像塔-https://arxiv.org/abs/2111.07991"""
+        self.visual.lock(unlocked_groups=unlocked_groups, freeze_bn_stats=freeze_bn_stats)
+    def lock_text_tower(self, unlocked_layers:int=0, freeze_layer_norm:bool=False):
+        """冻结text_tower的部分参数"""
+        assert freeze_layer_norm, "[WARNING] LayerNorm像其他权重一样处理!"
+        lock_text_tower( unlocked_layers=unlocked_layers)
+    @torch.jit.ignore
+    def set_grad_checkpointing(self, enable:bool=True):
+        """激活visual和text的梯度检查点"""
+        self.visual.set_grad_checkpointing(enable)
+        self.transformer.grad_checkpointing(enable)
+    @torch.jit.ignore()
+    def no_weight_decay(self,):
+        no_wd = {'positional_embedding'}
+        if hasattr(self.visual, 'no_weight_decay'):
+            for n in self.visual.no_weight_decay():
+                no_wd.add('visual.'+n)
+        return no_wd
+    def encode_image(self, image, normalize:bool=False):
+        """将图像转换为具有语义信息的固定维度向量"""
+        features = self.visual(image)
+        return F.normalize(features, dim=-1) if normalize else features
+    def encode_text(self, text, normalize:bool=False):
+        """将文本转换为具有语义信息的固定维度向量"""
+        cast_dtype = self.transformer.get_cast_dtype()
+        x = self.token_embedding(text).to(cast_dtype) # [N, L, C]
+        # 将预定义的位置嵌入positional_embedding与词嵌入相加,为每个token注入位置信息
+        x = x + self.positional_embedding.to(cast_dtype)
+        x = self.transformer(x, attn_mask=self.attn_mask)
+        x = text_global_pool(x, text, self.text_pool_type, eos_token_id=getattr(self, 'text_eos_id', None))
+        if self.text_projection is not None:
+            if isinstance(self.text_projection, nn.Linear):
+                x = self.text_projection(x)
+            else:
+                x = x @ self.text_projection
+        return F.normalize(x, dim=-1) if normalize else x
+    def get_logits(self, image, text):
+        """量化图像image和文本text之间的语义相似度,最终
+        返回图像到文本、文本到图像的两组匹配得分"""
+        # normalize表示对输出的特征向量进行L2归一化,归一化后特征向量的模长为1
+        image_features = self.encode_image(image, normalize=True)
+        text_features = self.encode_text(text, normalize=True)
+        # image_features[N, D], text_featrues[M, D]得到相似性[N, M]
+        # logit_scale做指数运算,作为相似度缩放因子,最终将余弦相似度映射为更高区分度的匹配得分
+        image_logits = self.logit_scale.exp() * image_features @ text_features.T
+        if self.logit_bias is not None:
+            # 基础匹配得分进行全局或局部偏移修正
+            image_logits += self.logit_bias
+        text_logits = image_logits.T # text_logits[M, N]
+        return image_logits, text_logits
+    def forward_intermediates(self,image:Optional[torch.Tensor]=None,
+                              text:Optional[torch.Tensor]=None,
+                              image_indices:Optional[Union[int, List[int]]]=None,
+                              text_indices:Optional[Union[int, List[int]]]=None,
+                              stop_early:bool=False,
+                              normalize:bool=False,
+                              normalize_intermediates:bool=False,
+                              intermediates_only:bool=False,
+                              image_output_fmt:str='NCHW',
+                              image_output_extra_tokens:bool=False,
+                              text_output_fmt:str='NLC',
+                              text_output_extra_tokens:bool=False,
+                              output_logits:bool=False,
+                              output_logit_scale_bias:bool=False,
+                              )->Dict[str, Union[torch.Tensor, List[torch.Tensor]]]:
+        """输入图像张量和/或文本张量,不仅能输出最终的图像特征、文本特征
+        (及可选的匹配logits),还能返回模型前向传播过程中的中间层特征"""
+        output = {}
+        if intermediates_only:
+            # 只要intermediates则不进行归一化
+            normalize = False
+            output_logits = False
+        if output_logits:
+            assert image is not None and text is not None, \
+                f'[WARNING] 请注意输入的image和text的张量均需要存在!'
+        # 进行image和text的前向传播intermediates,并返回中间层特征
+        if image is not None:
+            image_output = self.visual.forward_intermediates(image,
+                                                             indices=image_indices,
+                                                             stop_early=stop_early,
+                                                             normalize_intermediates=normalize_intermediates,
+                                                             intermediates_only=intermediates_only,
+                                                             output_fmt=image_output_fmt,
+                                                             output_extra_tokens=image_output_extra_tokens)
+            if normalize and 'image_features' in image_output:
+                image_output['image_features'] = F.normalize(image_output['image_features'], dim=-1)
+            output.update(image_output)
+        if text is not None:
+            cast_dtype = self.transformer.get_cast_dtype()
+            x = self.token_embedding(text).to(cast_dtype)
+            x = x + self.positional_embedding.to(cast_dtype)
+            x, intermediates = self.transformer.forward_intermediates(x,
+                                                            attn_mask=self.attn_mask,
+                                                            indices=text_indices)
+            if normalize_intermediates:
+                intermediates = [self.ln_final[xi] for xi in intermediates]
+            # NOTE 模型不支持分类的tokens否存在,因此需要将分类token的输出从intermediates中删除
+            output['text_intermediates'] = intermediates
+            if intermediates_only:
+                
+
 
