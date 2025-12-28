@@ -386,6 +386,7 @@ class CLIP(nn.Module):
                                                              output_extra_tokens=image_output_extra_tokens)
             if normalize and 'image_features' in image_output:
                 image_output['image_features'] = F.normalize(image_output['image_features'], dim=-1)
+            # 将image_out中的key:value批量添加到output中
             output.update(image_output)
         if text is not None:
             cast_dtype = self.transformer.get_cast_dtype()
@@ -399,6 +400,85 @@ class CLIP(nn.Module):
             # NOTE 模型不支持分类的tokens否存在,因此需要将分类token的输出从intermediates中删除
             output['text_intermediates'] = intermediates
             if intermediates_only:
+                x = self.ln_final(x) # [N, L, C]
+                x = text_global_pool(x, text, self.text_pool_type, eos_token_id=getattr(self, 'text_eos_id', None))
+                if self.text_projection is not None:
+                    if isinstance(self.text_projection, nn.Linear):
+                        x = self.text_projection(x)
+                    else:
+                        x = x @ self.text_projection
+                if normalize: x = F.normalize(x, dim=-1)
+                output['text_features'] = x
+        # 如果输出对数几率的变量,输出image/text的对数几率和偏置数据
+        logit_scale_exp = self.logit_scale_exp() if output_logits or output_logit_scale_bias else None
+        if output_logits:
+            image_logits = logit_scale_exp * output['image_features'] @ output['text_features']
+            if self.logit_bias is not None: image_logits += self.logit_bias # 添加偏置弥补位移差
+            text_logits = image_logits.T
+            output['image_features'] = image_logits
+            output['text_features'] =  text_logits
+        if output_logit_scale_bias:
+            output['logit_scale'] = logit_scale_exp
+            if self.logit_bias is not None:
+                output['logit_bias'] = self.logit_bias
+        return output
+    def forward(self, image: Optional[torch.Tensor]=None,
+                text:Optional[torch.Tensor]=None):
+        """核心是将输入的图像和文本张量进行编码,并返回最终的图像特征和文本特征即:
+        image_features, text_features, logit_scale, logit_bias"""
+        image_features = self.encode_image(image, normalize=True) if image is not None else None
+        text_features = self.encode_text(text, normalize=True) if text is not None else None
+        if self.output_dict:
+            out_dict = {
+                'image_features': image_features,
+                'text_features': text_features,
+                'logit_scale': self.logit_scale.exp()}
+            if self.logit_bias is not None:
+                out_dict['logit_bias'] = self.logit_bias
+            return out_dict
+        if self.logit_bias is not None:
+            return image_features, text_features, self.logit_scale.exp(), self.logit_bias
+        return image_features, text_features, self.logit_scale.exp()
                 
+        
+class CustomTextCLIP(nn.Module):
+    output_dict: torch.jit.Final[bool]
+    def __init__(self, 
+                 embed_dim:int,
+                 vision_cfg:CLIPVisionCfg,
+                 text_cfg:CLIPTextCfg,
+                 quick_gelu:bool=False,
+                 init_logit_scale: float = np.log(1 / 0.07),
+                 init_logit_bias: Optional[bool]=False,
+                 nonscalar_logit_scale: bool=False,
+                 cast_dtype: Optional[torch.dtype]=None,
+                 output_dict: bool=False
+                 )->None:
+        super().__init__()
+        self.output_dict = output_dict
+        self.visual = _build_vision_tower(embed_dim, vision_cfg, quick_gelu, cast_dtype)
+        self.text =  _build_text_tower(embed_dim, text_cfg, quick_gelu, cast_dtype)
+        self.context_length = self.text.context_length
+        self.vocab_size = self.text.vocab_size
+        # 根据输入参数的状态,动态初始化PyTorch中的可训练参数
+        lshape = [1] if nonscalar_logit_scale else []
+        self.logit_scale = nn.Parameter(torch.ones(lshape) * init_logit_scale)
+        if init_logit_bias is not None:
+            self.logit_bias = nn.Parameter(torch.ones(lshape) * init_logit_bias)
+        else: None
+    def lock_image_tower(self, unlocked_groups:int=0, freeze_bn_stats:bool=True):
+        """lock image tower as per LiT - https://arxiv.org/abs/2111.07991"""
+        self.visual.lock(unlocked_groups=unlocked_groups, freeze_bn_stats=freeze_bn_stats)
+    def lock_text_tower(self, unlocked_layers:int=0, freeze_layer_norm:bool=True):
+        """冻结文本编码塔的部分"""
+        self.text.lock(unlocked_layers=unlocked_layers, freeze_layer_norm=freeze_layer_norm)
+    @torch.jit.ignore
+    def set_grad_checkpointing(self, enable=True):
+        self.visual.set_grad_checkpointing(enable=enable)
+        self.text.set_grad_checkpointing(enable=enable)
+    @torch.jit.ignore
+    def no_weight_decay(self,):
+        """获取模型中不需要进行权重衰减的参数名称"""
+        
 
 
