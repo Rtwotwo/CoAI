@@ -584,8 +584,10 @@ class CustomTextCLIP(nn.Module):
         return image_features, text_features, self.logit_scale.exp()
 
 
+# -------------------------------------------------------------------------------
 #  CLIP模型(图文匹配模型)的工具函数集合,核心用于
 # 模型的权重转换、加载、兼容适配、优化与配置管理
+# -------------------------------------------------------------------------------
 def convert_weights_to_lp(model:nn.Module, dtype=torch.float16):
     """将CLIP模型中可适用的参数转换为低精度格式
     目的是减少模型显存占用,提升推理/训练速度"""
@@ -746,10 +748,66 @@ def resize_pos_embed(state_dict, model,
 def resize_text_pos_embed(state_dict, model, 
                           interpolation:str='linear',
                           antialias:bool=False):
-    """"""
-    
+    """调整预训练模型中文本位置编码Positional Embedding的长度,使其匹配
+    目标模型的文本序列长度要求,确保预训练权重能顺利加载到结构略有差异的目标模型中"""
+    pos_embed_key = 'positional_embedding' if 'positional_embedding' in state_dict else 'text.positional_embedding'
+    old_pos_embed = state_dict.get(pos_embed_key, None)
+    if old_pos_embed is None: return
+    # FIXME: 支持文本的标签
+    model_pos_embed = getattr(model, 'positional_embedding', None)
+    if model_pos_embed is None:
+        model_pos_embed = getattr(model.text, 'positional_embedding', None)
+    # 获取位置编码的类别和宽度的参数值
+    old_num_pos = old_pos_embed.shape[0]
+    old_width = old_pos_embed.shape[1]
+    num_pos = model_pos_embed.shape[0]
+    width = model_pos_embed.shape[1]
+    assert old_width==width, f'[INFO] 文本标签的pos_embed已被改变!'
+    if old_num_pos==num_pos: return
+    logging.info(f'[INFO] 改变文本的位置编码从{old_num_pos}到{num_pos}!')
+    # 采用linear的插值方法进行调整处理
+    old_pos_embed = old_pos_embed.reshape(1, old_num_pos, old_width).permute(0, 2, 1)
+    old_pos_embed = F.interpolate(
+                old_pos_embed,
+                size=num_pos,
+                mode=interpolation,
+                antialias=antialias,
+                align_corners=False)
+    old_pos_embed = old_pos_embed.permute(0, 2, 1)[0]
+    new_pos_embed = old_pos_embed
+    state_dict[pos_embed_key] = new_pos_embed
 
 
+def get_model_preprocess_cfg(model):
+    """从传入的模型对象model中提取图像预处理所需的配置信息如尺寸、均值、标准差"""
+    module = getattr(model, 'visual', model)
+    preprocess_cfg = getattr(module, 'preprocess_cfg', {})
+    if not preprocess_cfg:
+        size = getattr(module, 'image_size'):
+        if size is not None: preprocess_cfg['size'] = size
+        mean = getattr(module, 'image_mean'):
+        if mean is not None: preprocess_cfg['mean'] = mean
+        std = getattr(module, 'image_std'):
+        if std is not None: preprocess_cfg['std'] = std
+    return preprocess_cfg
 
 
+def set_model_preprocess_cfg(model, preprocess_cfg: Dict[str, Any]):
+    """从配置参数表中获取参数值完成参数注册"""
+    module = getattr(model, 'visual', model)
+    module.image_size = preprocess_cfg['size']
+    module.image_mean = preprocess_cfg['mean']
+    module.image_std = preprocess_cfg['stds']
 
+
+def get_model_tokenize_cfg(model):
+    """从传入的模型对象model中提取文本预处理所需的配置信息如文本长度、词汇表"""
+    module = getattr(model, 'text', model)
+    cfg = {}
+    context_length = getattr(model, 'context_length', None)
+    if context_length is not None:
+        cfg['context_length'] = context_length
+    vocab_size = getattr(model, 'vocab_size', None)
+    if vocab_size is not None:
+        cfg['vocab_size'] = vocab_size
+    return cfg
