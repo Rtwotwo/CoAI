@@ -479,6 +479,277 @@ class CustomTextCLIP(nn.Module):
     @torch.jit.ignore
     def no_weight_decay(self,):
         """获取模型中不需要进行权重衰减的参数名称"""
-        
+        no_wd = set()
+        if hasattr(self.visual, 'no _weight_decay'):
+            for n in self.visual.no_weight_decay():
+                no_wd.add('visual.', n)
+        if hasattr(self.text, 'no_weight_decay'):
+            for n in self.text.no_weight_decay():
+                no_wd.add('text.', n)
+        return no_wd
+    def encode_image(self, image, normalize:bool=False):
+        features = self.visual(image)
+        return F.normalize(features, dim=-1) if normalize else  features
+    def encode_text(self, text, normalize:bool=False):
+        features = self.text(text)
+        return F.normalize(features, dim=-1) if normalize else features
+    def get_logits(self, image, text):
+        """获取图像和文本之间的对数几率"""
+        image_features = self.encode_image(image, normalize=True)
+        text_features = self.encode_text(text, normalize=True)
+        image_logits = self.logit_scale * image_features @ text_features.T
+        if self.logit_bias is not None:
+            image_logits += self.logit_bias
+        text_logits = image_logits.T
+        return image_logits, text_logits
+    def forward_intermediates(self, image: Optional[torch.Tensor]=None,
+                              text: Optional[torch.Tensor]=None,
+                              image_indices: Optional[Union[int, List[int]]]=None,
+                              text_indices: Optional[Union[int, List[int]]]=None,
+                              stop_early: bool=False,
+                              normalize: bool=True,
+                              normalize_intermediates: bool=False,
+                              intermediates_only:bool=False,
+                              image_output_fmt: str='NCHW',
+                              image_output_extra_tokens: bool=False,
+                              text_output_fmt: str='NLC',
+                              text_output_extra_tokens: bool=False,
+                              output_logits: bool=False,
+                              output_logit_scale_bias: bool=False
+                              )->Dict[str, Union[torch.Tensor,  List[torch.Tensor]]]:
+        """indices如果是整数,则取最后n个块;如果是 None,则取所有块;如果是序列,则选择匹配的索引
+        stop_early当遇到最后一个所需的中间结果时,停止对块的迭代
+        indices/stop_early灵活筛选中间层,避免冗余计算,适用于需要多层特征融合的场景
+        intermediates_only仅返回中间特征;normalize_intermediates对所有中间结果应用最终的归一化
+        output_fmt中间特征输出的形状;output_extra_tokens返回额外前缀类别标记"""
+        output = {}
+        if intermediates_only:
+            normalize = False
+            output_logits = False
+        if output_logits: 
+            assert image is not None and text is None, \
+                f'[WARNING]  output_logits=True requires image and text inputs.'
+        # 获取图像image和文本text的特征编码,并且嵌入到output
+        if image is not None:
+            image_output = self.visual.forward_intermediates(image,
+                                                            indices=image_indices,
+                                                            stop_early=stop_early,
+                                                            normalize_intermediates=normalize_intermediates,
+                                                            intermediates_only=intermediates_only,
+                                                            output_fmt=image_output_fmt,
+                                                            output_extra_tokens=image_output_extra_tokens,)
+            if normalize and "image_features" in image_output:
+                image_output['image_features'] = F.normalize(image_output['image_features'], dim=-1)
+            output.update(image_output)
+        if text is not None:
+            text_output = self.text.forward_intermediates(text,
+                                                        indices=text_indices,
+                                                        stop_early=stop_early,
+                                                        normalize_intermediates=normalize_intermediates,
+                                                        intermediates_only=intermediates_only,
+                                                        output_fmt=text_output_fmt,
+                                                        output_extra_tokens=text_output_extra_tokens,)
+            if normalize and 'text_features' in text_output:
+                text_output['text t_features'] = F.normalize(text_output['text_features'], dim=-1)
+                output.update(text_output)
+        # 获取文本text和图像image之间的对数几率和bias
+        logit_scale_exp = self.logit_scale.exp() if self.output_logits or output_logit_scale_bias else None
+        if output_logits:
+            image_logits = logit_scale_exp * output['image_features'] @ output['text_features'].T
+            if self.logit_bias is not None:
+                image_logits += self.logit_bias
+            text_logits = image_logits.T
+            output['image_logits'] = image_logits
+            output['text_logits'] = text_logits
+        if output_logit_scale_bias:
+            output['logit_scale'] = logit_scale_exp
+            if self.logit_bias is not None:
+                output['logit_bias'] = self.logit_bias
+        return output
+    def forward(self, image:Optional[torch.Tensor]=None,
+                text:Optional[torch.Tensor]=None
+                )->torch.Tensor:
+        image_features = self.encode_image(image, normalize=True) if image is not None else None
+        text_features = self.encode_text(text, normalize=True) if text is not None else None
+        if self.output_dict:
+            out_dict = {
+                'image_features': image_features,
+                'text_features': text_features,
+                'logit_scale': self.logit_scale.exp()}
+            if self.logit_bias is not None:
+                out_dict['logit_bias'] = self.logit_bias
+            return out_dict
+        if self.logit_bias is not None:
+            return image_features, text_features, self.logit_scale.exp(), 
+        return image_features, text_features, self.logit_scale.exp()
+
+
+#  CLIP模型(图文匹配模型)的工具函数集合,核心用于
+# 模型的权重转换、加载、兼容适配、优化与配置管理
+def convert_weights_to_lp(model:nn.Module, dtype=torch.float16):
+    """将CLIP模型中可适用的参数转换为低精度格式
+    目的是减少模型显存占用,提升推理/训练速度"""
+    def _convert_weights(l):
+        if isinstance(l, (nn.Conv1d, nn.Conv2d, nn.Linear)):
+            l.weight.data = l.weight.data.to(dtype)
+            if l.bias is not None: l.bias.data = l.bias.data.to(dtype)
+        if isinstance(l, (nn.MultiheadAttention, Attention)):
+            for attr in [*[f'{s}_proj_weight' for s in ['in', 'q', 'k', 'v']],
+                          'in_proj_bias', 'bias_k', 'bias_v']:
+                tensor = getattr(l, attr, None)
+                tensor.data = tensor.data.to(dtype)
+        if isinstance(l, (CLIP, TextTransformer)):
+            # convert text nn.Parameter projections
+            attr = getattr(l, 'text_projection', None)
+            if attr is not None: attr.data = attr.data.to(dtype)
+        if isinstance(l, VisionTransformer):
+            # convert vision nn.Parameter projections
+            attr = getattr(l, 'proj', None)
+            if attr is not None:
+                attr.data = attr.data.to(dtype)
+    model.apply(_convert_weights)
+# 保证backwards compact的兼容性
+convert_weights_to_fp16 = convert_weights_to_lp
+
+
+def convert_to_custom_text_state_dict(state_dict:dict):
+    """维护模型检查点checkpoint的兼容性,解决新旧
+    版本模型权重字典state_dict的格式差异"""
+    if 'text_projection' in state_dict:
+        # 旧版的format输出到text_tower的.text
+        # 主要就是将state_dict中的键更换一下名称
+        new_state_dict = {}
+        for k, v in state_dict.items():
+            if any(k.startswith(p) for p in (
+                'text_projection',
+                'positional_embedding',
+                'token_embedding',
+                'transformer',
+                'ln_final')):
+                k = 'text.' + k
+            new_state_dict[k] = v
+        return new_state_dict
+    return state_dict
+
+
+def build_model_from_openai_state_dict(
+        state_dict: dict,
+        quick_gelu:bool= True,
+        cast_dtype=torch.float16):
+    """从预训练的CLIP模型权重字典state_dict中自动提取
+    视觉分支和文本分支的配置参数,构建CLIP模型实例,并加载
+    预训练权重返回一个评估模式的CLIP模型"""
+    # 视觉分支的参数的参数配置
+    vit = 'visual.proj' in state_dict
+    if vit:
+        vision_width = state_dict['visual.conv1.weight'].shape[0]
+        vision_layers = len([k for k in state_dict.keys() if k.startswith('visual.') 
+                             and k.endswith('attn.in_proj_weight')])
+        vision_patch_size = state_dict['visual.conv1.weight'].shape[-1]
+        grad_size = round((state_dict['visual.positional_embedding'].shape[0]-1) ** 0.5)
+        image_size = vision_patch_size * grad_size
+    else:
+        counts:list=[len(set(k.split('.')[2] for k in state_dict if k.startswith('visual.layer{b}'))) for b in [1, 2, 3, 4]]
+        vision_layers = tuple(counts)
+        vision_width = state_dict['visual.conv1.weight'].shape[0]
+        output_width = round((state_dict['visual.attnpool.positional_embedding'].shape[0] - 1) ** 0.5)
+        vision_patch_size = None
+        assert output_width ** 2 + 1 == state_dict['visual.attnpool.positional_embedding'].shape[0], \
+                    f'[WARNING]  output_width ** 2 + 1 != visual.attnpool.positional_embedding.shape[0]'
+        image_size = output_width * 32
+    #  文本分支的配置参数
+    embed_dim = state_dict['text_projection'].shape[1]
+    context_length = state_dict['positional_embedding'].shape[0]
+    vocab_size = state_dict['token_embeddidng.weight'].shape[0]
+    transformer_width = state_dict['ln_final.weight'].shape[0]
+    transformer_heads = transformer_width // 64
+    transformer_layers = len(set(k.split('.')[2] for k in state_dict if k.startswith('transformer.resblocks')))
+    # 修改CONFIG中的相关配置
+    vision_cfg = CLIPVisionCfg(
+        layers=vision_layers,
+        width=vision_width,
+        patch_size=vision_patch_size,
+        image_size=image_size)
+    text_cfg = CLIPTextCfg(
+        context_length=context_length,
+        vocab_size=vocab_size,
+        width=transformer_width,
+        heads=transformer_heads,
+        layers=transformer_layers)
+    model = CLIP(embed_dim,
+                 vision_cfg=vision_cfg,
+                 text_cfg=text_cfg,
+                 quick_gelu=quick_gelu,
+                 cast_dtype=cast_dtype)
+    # 模型的参数的配置
+    for key in ['input_resolution', 'context_length', 'vocab_size']:
+        state_dict.pop(key, None)
+    # OpenAI model的参数模型部分被注册为fp16的精度
+    convert_weights_to_fp16(model)
+    model.load_state_dict(state_dict)
+    return model.eval()
+
+
+def trace_model(model, batch_size:int=256, 
+                device=torch.device('cpu')):
+    """该函数的核心作用是使用 PyTorch 的JIT追踪机制,将输入的
+    视觉-文本模型(推测为 CLIP 类模型)转换为静态图形式的TorchScript模块"""
+    model.eval()
+    image_size = model.image_size
+    example_image = torch.ones((batch_size, 3, image_size, image_size), device=device)
+    example_text = torch.zeros((batch_size, model.context_length), dtype=torch.int, device=device)
+    model = torch.jit.trace_module(
+                    model, 
+                    inputs=dict(
+                        forward=(example_image, example_text),
+                        encode_text = (example_text),
+                        encode_image=(example_image),),)
+    model.visual.image_size = image_size
+    return model
+
+
+def resize_pos_embed(state_dict, model, 
+                     interpolation:str='bicubic', 
+                     antialias:bool=False):
+    """当加载预训练模型的状态字典(state_dict)时,自动调整视觉模块visual中位置嵌入
+    positional embedding的网格尺寸,使其匹配当前模型的输入网格大小"""
+    # 获取model的visual部分的grad_size参数
+    old_pos_embed = state_dict.get('visual.postional_embedding', None)
+    if old_pos_embed is None or not hasattr(model.visual, 'grid_size'): return
+    # 拆分原来的positional_embedding为类别和图像token
+    grad_size = to_2tuple(grad_size)
+    extra_token = 1 # FIXME: 检测不同类型的token标注
+    new_seq_len = grad_size[0] * grad_size[1] + extra_token
+    if new_seq_len == old_pos_embed.shape[0]: return # 两者相等,不必转换
+    if extra_token:
+        pos_emb_tok, pos_emb_img = old_pos_embed[:extra_token], old_pos_embed[extra_token:]
+    else:
+        pos_emb_tok, pos_emb_img = None, old_pos_embed[extra_token:]
+    old_grad_size = to_2tuple(int(math.sqrt(len(pos_emb_img))))
+    logging.info(f'[INFO] 重新调整位置参数的grad_size从{old_grad_size}到{grad_size}')
+    # 使用插值进行处理pos_embed_image,注意pos_embed_img的形状的变化
+    pos_emb_img = pos_emb_img.reshape(1, old_grad_size[0], old_grad_size[1], -1).permute(0, 3, 1, 2)
+    pos_emb_img = F.interpolate(
+                pos_emb_img,
+                size=grad_size,
+                mode=interpolation,
+                antialias=antialias,
+                align_corners=False)
+    pos_emb_img = pos_emb_img.permute(0, 2, 3, 1).reshape(1, grad_size[0], grad_size[1], -1)[0]
+    if pos_emb_tok is not None:
+        new_pos_embed = torch.cat([pos_emb_tok, pos_emb_img], dim=0)
+    else:
+        new_pos_embed = pos_emb_img
+    state_dict['visual.positional_embedding'] = new_pos_embed
+    
+
+def resize_text_pos_embed(state_dict, model, 
+                          interpolation:str='linear',
+                          antialias:bool=False):
+    """"""
+    
+
+
+
 
 
