@@ -1,5 +1,5 @@
 """
-Modified By: Redal
+Copied By: Redal
 Date: 2025-12-23
 Todo: OpenCLIP库的核心模型构建与加载模块,主要用于创建、配置和加载视觉-语言对比学习模型
       如CLIP、CoCa、SigLIP 等,同时支持多来源配置与权重加载
@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
 
 import torch
-
 from .convert import convert_state_dict
 from .model import CLIP, CustomTextCLIP, convert_weights_to_lp, convert_to_custom_text_state_dict,\
     resize_pos_embed, get_cast_dtype, resize_text_pos_embed, set_model_preprocess_cfg
@@ -27,7 +26,6 @@ from .pretrained import is_pretrained_cfg, get_pretrained_cfg, download_pretrain
     list_pretrained_tags_by_model, download_pretrained_from_hf
 from .transform import image_transform_v2, AugmentationCfg, PreprocessCfg, merge_preprocess_dict, merge_preprocess_kwargs
 from .tokenizer import HFTokenizer, SimpleTokenizer, SigLipTokenizer, DEFAULT_CONTEXT_LENGTH
-
 HF_HUB_PREFIX = 'hf-hub:'
 _MODEL_CONFIG_PATHS = [Path(__file__).parent / f"model_configs/"]
 _MODEL_CONFIGS = {}  # directory (model_name: config) of model architecture configs

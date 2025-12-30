@@ -1,5 +1,5 @@
 """
-Modified By: Redal
+Copied By: Redal
 Date: 2025-12-23
 Todo: 针对CLIP系列模型含CustomTextCLIP、MobileCLIP、SigLIP的预训练权重转换与加载工具,
       解决不同框架/版本(Google big_vision、Apple MobileCLIP、OpenCLIP)下模型权重格式不兼容的问题
