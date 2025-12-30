@@ -783,11 +783,11 @@ def get_model_preprocess_cfg(model):
     module = getattr(model, 'visual', model)
     preprocess_cfg = getattr(module, 'preprocess_cfg', {})
     if not preprocess_cfg:
-        size = getattr(module, 'image_size'):
+        size = getattr(module, 'image_size')
         if size is not None: preprocess_cfg['size'] = size
-        mean = getattr(module, 'image_mean'):
+        mean = getattr(module, 'image_mean')
         if mean is not None: preprocess_cfg['mean'] = mean
-        std = getattr(module, 'image_std'):
+        std = getattr(module, 'image_std')
         if std is not None: preprocess_cfg['std'] = std
     return preprocess_cfg
 
