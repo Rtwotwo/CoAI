@@ -241,6 +241,20 @@ flowchart LR
     W --> X
 ```
 
+```mermaid
+flowchart LR
+    A["原始文本\n(str 或 List[str])"]
+    --> B["清洗文本\n(clean_fn: lower/whitespace/canonicalize)\n→ str"]
+    --> C["正则分词\nre.findall(pat, text)\n→ List[str]"]
+    --> D["UTF-8 编码 → 字节\n.encode('utf-8')\n→ List[int] (0~255)"]
+    --> E["字节 → 可打印 Unicode\nbyte_encoder[b]\n→ str"]
+    --> F["BPE 子词分割\nbpe(token)\n→ 'sub1 sub2 ...</w>'"]
+    --> G["Token → ID\nencoder[subword]\n→ List[int] (len=N)"]
+    --> H["添加特殊标记\n[SOT] + ids + [EOT]\n→ len=N+2"]
+    --> I["截断/填充至 77\n(末尾强制为 EOT)\n→ List[int] (len≤77)"]
+    --> J["输出 LongTensor\n→ torch.LongTensor\nShape: [batch_size, 77]"]
+```
+
 ## :house: 3.CoCa Architecture :house:
 
 CoCa ([Contrastive Captioners](https://github.com/Rtwotwo/Code-Exam/blob/main/dl_exam/vlm/clip_latest/coca_model.py)) is a multimodal model that integrates contrastive learning with generative image captioning. Its construction is centered on a dual-tower plus decoder architecture of "vision tower + text encoder + text decoder": first, it parses three types of configurations, namely CLIPTextCfg, CLIPVisionCfg, and MultimodalCfg, and respectively constructs the VisionTransformer visual encoder through _build_vision_tower, the CLIP-style text encoder through build_text_tower, and the MultimodalTransformer text decoder through build_text_decoder_tower. At the same time, it initializes parameters such as the temperature coefficient logit_scale for contrastive learning. The core function of this model is to achieve image-text feature alignment through cross-modal contrastive learning, supporting image-text retrieval/matching tasks. Additionally, relying on visual features to drive the text decoder, it completes generative tasks such as image captioning. It possesses both feature discriminability and generativeness, and is suitable for a wide range of downstream multimodal tasks such as visual question answering and multimodal retrieval.

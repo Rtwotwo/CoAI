@@ -100,6 +100,6 @@ class CoCa(nn.Module):
             self.text = _build_text_tower()
             self.visual = _build_vision_tower()
             self.text_decoder = _build_text_decoder_tower()
-
+            
 
 
