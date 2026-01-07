@@ -77,7 +77,6 @@ def build_zero_shot_classifier_legacy(model,
                                       templates: Sequence[Union[Callable, str]],
                                       device: Union[str, torch.device]='cpu',
                                       use_tqdm: bool=False):
-      """"""
       assert isinstance(templates, Sequence) and len(templates)>0
       assert isinstance(classnames, Sequence) and len(classnames)>0
       if use_tqdm:
