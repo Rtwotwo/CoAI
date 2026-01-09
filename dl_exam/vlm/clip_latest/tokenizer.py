@@ -22,6 +22,11 @@ _nltk_init = False
 DEFAULT_CONTEXT_LENGTH=77
 
 
+# ----------------------------------------------------------------------
+# SimpleTokenizer:
+# 基于BPE(字节对编码)的轻量级文本分词器(SimpleTokenizer),核心用于将自然语言
+# 文本转换为模型可处理的token序列,适配大语言模型的输入格式
+# ----------------------------------------------------------------------
 @lru_cache()
 def default_bpe():
     """核心作用是实现函数结果缓存,避免重复计算带来的性能损耗"""
@@ -140,6 +145,7 @@ class SimpleTokenizer(object):
         if additional_special_tokens: 
             special_tokens += additional_special_tokens
         vocab.extend(special_tokens)
+        # encoder和decoder的设置目的是将获取到的bpe编码转成token ID
         self.encoder = dict(zip(vocab, range(len(vocab))))
         self.decoder = {v:k for k,v in self.encoder.items()}
         self.bpe_tokens = dict(zip(merges,  range(len(merges))))
@@ -156,6 +162,79 @@ class SimpleTokenizer(object):
         self.context_length = context_length
         self.clean_fn = get_clean_fn(clean)
         self.reduction_fn = get_reduction_mask_fn(reduction_mask) if reduction_mask else None
+    def bpe(self, token):
+        """BPE字节对编码算法的核心实现代码,用于将输入token拆分为BPE子词
+        功能:输入一个原始 token如单词apple,输出其BPE编码后的子词序列
+        (如 “app le</w>”，</w>是词尾标记),同时用cache缓存结果避免重复计算"""
+        if token in self.cache: return self.cache[token]
+        word = tuple(token[-1]) + (token[-1] + '</w>',)
+        pairs = get_pairs(word)
+        if not pairs: return token+'</w>'
+        # BPE合并循环-预训练的bigram优先级字典
+        while True:
+            bigram = min(pairs, key=lambda pair: self.bpe_tokens.get(pair, float('inf')))
+            if bigram not in self.bpe_tokens: break
+            first, second = bigram
+            new_word = []
+            i = 0
+            while i<len(word):
+                # 将word中的词汇进行筛选出不存在bpe词汇表的情况
+                try:
+                    j = word.index(first, i)
+                    new_word.extend(word[i:j])
+                    i = j
+                except Exception:
+                    new_word.extend(word[i:])
+                    break
+                # 按照优先级的情况来合并相邻的两个token
+                if word[i]==first and i<len(word)-1 and word[i+1]==second:
+                    new_word.append(first+second)
+                    i += 2
+                else:
+                    new_word.append(word[i])
+                    i += 1
+            new_word = tuple(new_word)
+            word = new_word
+            if len(word)==1: break
+            else: pairs = get_pairs(word)
+        word = ' '.join(word)
+        self.cache[token] = word
+        return word
+    def encode(self, text):
+        bpe_tokens = []
+        # 1.将原始纯文本全部转成小写字符
+        text = self.clean_fn(text)
+        for token in re.findall(self.pat, text):
+            # 2.将token转换为utf-8编码的字节序列
+            token = ''.join(self.byte_encoder(b) for b in token.encode('utf-8'))
+            # 3.对token进行BPE编码,并转换为token ID
+            bpe_tokens.extend(self.encoder[bpe_token] for bpe_token in self.bpe(token).split(' '))
+        return bpe_tokens
+    def decode(self, tokens):
+        text = ''.join(self.decoder[token] for token in tokens)
+        text = bytearray([self.byte_decoder(b) for b in text]).decode('utf-8', errors='replace').replace('</w>', ' ')
+        return text
+    def __call__(self, texts: Union[str, List[str]],
+                 context_length: Optional[int] = None,
+                 )->torch.LongTensor:
+        if isinstance(texts, str): texts = [texts]
+        context_length = context_length or self.context_length
+        assert context_length, f"[ERROR] 请设置合理的context_length的值!"
+        if self.reduction_fn is not None:
+            return self.reduction_fn(texts, 
+                                     context_length=context_length,
+                                     sot_token_id=self.sot_token_id,
+                                     eot_token_id=self.eot_token_id,
+                                     encode_fn=self.encode)
+        # 对tokens进行正常的文本->文本索引->bpe编码->token
+        all_tokens = [[self.sot_token_id] + self.encode(text) + [self.eot_token_id] for text in texts]
+        result = torch.zeros(len(all_tokens), context_length, dtype=torch.long)
+        for i, token in enumerate(all_tokens):
+            if len(token) > context_length:
+                token = token[:context_length] #truncate
+                token[-1] = self.eot_token_id
+            result[i, len(token)] = torch.tensor(token)
+        return result
 _tokenizer =  SimpleTokenizer()
         
 
@@ -181,7 +260,8 @@ def random_mask_tokenize(texts: Union[str, List[str]],
                          eot_token_id: int,
                          encode_fn: Callable,
                          shuffle: bool=False):
-    """随机掩码填充文本"""
+    """带随机掩码/截断的文本tokenize工具,核心作用是将文本编码为固定长度的
+    token序列,适配模型输入格式,同时支持超长文本的随机截断(可选有序保留)"""
     all_tokens = [encode_fn(text) for text in texts]
     result = torch.zeros(len(all_tokens), context_length, dtype=torch.long)
     for i, tokens in enumerate(all_tokens):
@@ -190,17 +270,242 @@ def random_mask_tokenize(texts: Union[str, List[str]],
         # context_length-2留给sot和eot token
         if num_tokens > context_length-2: 
             num_keep = context_length - 2
+            # 对超出的序列进行截断并且打乱排序
             indices = torch.randperm(len(tokens))
             indices = indices[:num_keep]
             if not shuffle:
                  indices = indices.msort()
             tokens =  tokens[indices]
             num_tokens = num_keep
+        # 将正常的序列放入context_length中
         result[i, 0] = sot_token_id
         result[i, 1:num_tokens+1] = tokens
         result[i, num_tokens+1] = eot_token_id
     return  result
 
 
-def get_reduction_mask_fn():
+def simple_mask_tokenize(texts: Union[str, List[str]],
+                         context_length: int,
+                         sot_token_id: int, 
+                         eot_token_id: int,
+                         encode_fn:  Callable):
+    """文本的简单掩码/填充预处理工具,核心作用是将输入文本
+    (单条或多条)编码后,统一处理成固定长度的token序列"""
+    all_tokens =  [encode_fn(text) for text in texts]
+    result = torch.zeros(len(all_tokens), context_length, dtype=torch.long)
+    for i, tokens in enumerate(all_tokens):
+        num_tokens = len(tokens)
+        if num_tokens > context_length-2:
+            num_keep = context_length -2
+            # 掩码并且进行截断
+            start_index = random.randint(0, num_tokens - num_keep)
+            tokens = tokens[start_index: start_index + num_keep]
+        tokens = [sot_token_id] + tokens + [eot_token_id]
+        result[i, :len(tokens)] = torch.tensor(tokens)
+    return result
+
+
+def syntax_mask_tokenize(texts: Union[str, List[str]],
+                         context_length: int,
+                         sot_token_id: int,
+                         eot_token_id: int,
+                         encode_fn: Callable
+                         )->torch.LongTensor:
+    """带语法掩码的文本tokenize工具,核心作用是将文本编码为固定长度的
+    token序列,适配模型输入格式,同时支持超长文本的随机截断(可选有序保留)"""
+    import nltk
+    global _nltk_init
+    if not _nltk_init:
+        # 如果首次运行则下载相应数据
+        nltk.download('punkt')
+        nltk.download('averaged_perceptron_tagger')
+        _nltk_init = True
+    def get_order(x):
+        """根据字符串前缀分类并返回对应优先级序号"""
+        if x.startswith('NN'): return 1
+        elif x.startswith('JJ'): return 2
+        elif x.startswith('VB'): return 3
+        else: return 4
+    # 对输入文本集合texts进行词性优先级采样
+    new_texts = []
+    for text in texts:
+        # 分词+词性标注
+        list_tokens = nltk.tokenize.word_tokenize(text)
+        pos_tags = nltk.pos_tag(list_tokens)
+        # 词性优先级排序与筛选
+        order_list = [get_order(tag) for _, tag in pos_tags]
+        sorted_ids = np.argsort(np.array(order_list))
+        sample_ids = sorted(sorted_ids[:context_length-2]) # need 2 for sot and eot
+        # 重构文本,np.take根据筛选后的索引,从原分词列表中提取关键tokens
+        sample_tokens = np.take(np.array(list_tokens), sample_ids, axis=0)
+        new_text = ''
+        for token in sample_tokens:
+            new_text = new_text + str(token) + ' '
+        new_text = new_text.strip()
+        new_texts.append(new_text)
+    texts = new_texts
+    # 进行常规的tokenize处理
+    all_tokens = [[sot_token_id]+encode_fn(text)+[eot_token_id] for text in texts]
+    result = torch.zeros(len(all_tokens), context_length, dtype=torch.long)
+    for i, tokens in enumerate(all_tokens):
+        # 仍然需要需要第一阶段,有些词汇会出现两个token
+        if len(tokens) > context_length:
+            tokens = tokens[:context_length]
+            tokens[-1] = eot_token_id
+        result[i,:len(tokens)] = torch.tensor(tokens)
+    return result
+
+
+def get_reduction_mask_fn(type: str):
     """获取用于减少掩码的函数"""
+    assert type in ('simple', 'random', 'shuffle', 'syntax'), \
+            f'[WARNING] Invalid reduction mask type: {type}!'
+    if type == 'simple': return simple_mask_tokenize
+    elif type == 'random': return random_mask_tokenize
+    elif type == 'shuffle': return partial(random_mask_tokenize, shuffle=True)
+    elif type == 'syntax': return syntax_mask_tokenize
+    else: assert False, f'[ERROR] Unkonwn type {type}!'
+
+
+# ----------------------------------------------------------------------
+# HFTokenizer:
+# 基于HuggingFace Transformers库的文本分词器,用于将自然语言文本转换为模型可处理的token序列
+# ----------------------------------------------------------------------
+class HFTokenizer:
+    def __init__(self, tokenizer_name:str,
+                 context_length: Optional[int]=DEFAULT_CONTEXT_LENGTH,
+                 clean: str='whitespace',
+                 strip_sep_token: bool=False,
+                 language: Optional[str]=None,
+                 cache_dir: Optional[str]=None,
+                 tokenizer_mode: Optional[str]=None, # None, 'clips'
+                 **kwargs)->None:
+        # 初始化相关参数
+        self.tokenizer_name = tokenizer_name or ''
+        self.context_length = context_length
+        self.clean_fn = get_clean_fn(clean)
+        self.strip_sep_token = strip_sep_token
+        # NOTE: 下列代码为自定义的tokenizer并且初始化
+        if self.tokenizer_name == 'bert_clips':
+            self.special_tokens = {
+                'bos_token': 1,
+                'eos_token': 2,
+                'cls_token': 101,
+                'pad_token': 0}
+            # 对于Bert的CLIP的模式使用vocab文件
+            from tokenizers import BertWordPieceTokenizer
+            if tokenizer_mode.startswith('hf-hub'):
+                # 构建下载文件链接 
+                from huggingface_hub import hf_hub_download
+                repo_url = tokenizer_name[7:]
+                parts = repo_url.split('/')
+                filename = parts[-1]
+                repo_id = '/'.join(parts[:-1])
+                # 下载需要的vocab file文件至指定的文件缓存文件夹
+                vocab_file = hf_hub_download(repo_id=repo_id, filename=filename, cache_dir=cache_dir)
+                self.tokenizer = BertWordPieceTokenizer(lowercase=True)
+                self.tokenizer = self.tokenizer.from_files(vocab_file)
+            else:
+                # 确保vocab文件存在于本地文件夹的地址
+                # 此时tokenizer_name是本地路径地址,而非hugging_face链接
+                self.tokenizer = BertWordPieceTokenizer(lowercase=True)
+                self.tokenizer = self.tokenizer.from_files(tokenizer_name)
+        # 下列标准的HuggingFace tokenizer初始化
+        from transformers import AutoTokenizer
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, cache_dir=cache_dir, **kwargs)
+        # Set language function if available
+        set_lang_fn = getattr(self.tokenizer, 'set_src_lang_special_tokens', None)
+        if callable(set_lang_fn):
+            self.set_lang_fn = set_lang_fn
+        if language is not None:
+            self.set_language(language)
+    def save_pretrained(self, dest):
+        self.tokenizer.save_pretrained(dest)
+    def __call__(self, texts: Union[str, List[str]],
+                 context_length: Optional[int]=None
+                 )->torch.Tensor:
+        """"""
+        if isinstance(texts, str): texts = [texts]
+        context_length = context_length or self.context_length
+        assert context_length, f'[ERROR] 请设置合理的context_length!'
+        # 清洗文本: 主要通过删除文本之间的空白
+        texts = [self.clean_fn(text) for text in texts]
+        # 处理不同tokenization的模式
+        if self.tokenizer_name == 'clips':
+            return self._clips_tokenize(texts, context_length)
+        else:
+            # 标准的tokenization处理流程
+            input_ids = self.tokenizer.batch_encode_plus(
+                texts, 
+                context_length = context_length,
+                add_special_tokens = False,
+                padding=False,
+                truncation=False,
+                return_tensors=None).input_ids
+            if self.strip_sep_token:
+                input_ids = torch.where(
+                        input_ids == self.tokenizer.strip_sep_token_id,
+                        torch.zeros_like(input_ids),
+                        input_ids)
+            return input_ids
+    def set_language(self, src_lang):
+        if hasattr(self, 'set_lang_fn'):
+            self.set_lang_fn(src_lang)
+        else:
+            warnings.warn(f'[WARNING]  {self.tokenizer_name} does not support set_language()!')
+
+    def _clips_tokenize(self, texts: List[str], 
+                        context_length:int
+                        )->torch.Tensor:
+        """专门用于HFTokenzier里面针对CLIP模型的tokenizer分词器
+        提供CLIP和Standard的两种标准的分词模式"""
+        # 基础分词(无特殊token)
+        encoded_outputs = self.tokenizer.batch_encode_plus(
+                        texts,
+                        add_special_tokens=False, # 不自动加bos/eos/cls/pad
+                        padding=False,
+                        truncation=False,    # 进行截断处理
+                        return_tensors=None) # 返回原生list,并非tensor
+        encoded = []
+        for tokens in encoded_outputs['input_ids']:
+            tokens = tokens[:context_length - 3]
+            tokens = [self.tokenizer.bos_token_id] + tokens + [self.eos_token_id]
+            encoded.append(tokens)
+        # 创建输出的结果tensor并且处理padding+cls token
+        result = torch.zeros(len(encoded), context_length, dtype=torch.long)
+        for i, tokens in enumerate(encoded):
+            # 同时对tokens的序列进行padding和cls标记处理
+            padded_tokens = self._pad_and_cls_token(
+                        tokens, 
+                        max_length = context_length,
+                        pad_token_id = self.tokenizer.pad_token_id,
+                        cls_token_id= self.tokenizer.cls_token_id,)
+            result[i, :len(padded_tokens)] = torch.tensor(padded_tokens)
+        return result
+    def _pad_and_cls_token(self, tokens: List[int], 
+                           max_length: int,
+                           pad_token_id: int=0,
+                           cls_token_id: int=101
+                           )->List[int]:
+        """针对提出的文本序列token化进行tokens的padding和clstoken处理"""
+        if len(tokens) > max_length -1:
+            tokens = tokens[:max_length - 1]
+        # 添加padding直到tokens的max_length -1的位置
+        if len(tokens) < max_length - 1:
+            tokens = tokens + [pad_token_id]*(max_length - 1 -len(tokens))
+        # 在添加cls token在tokens的末尾
+        tokens = tokens + [cls_token_id]
+        return tokens 
+
+
+class SigLipToeknizer:
+    # 给定指定的vocab_files进行下载
+    VOCAB_FILES = { # english, vocab_size=32_000
+                    "c4-en": "http://storage.googleapis.com/t5-data/vocabs/cc_en.32000/sentencepiece.model",
+                    # used in multilingual models (mT5, PaLI), vocab_size=250_000
+                    "mc4": "http://storage.googleapis.com/t5-data/vocabs/mc4.250000.100extra/sentencepiece.model",
+                    # used in SigLIP2 models, vocab_size=256000
+                    "gemma": "http://storage.googleapis.com/big_vision/gemma_tokenizer.model",}
+    def __init__(self, tokenizer_name: str,
+                 context_length: int=64):
+        """"""
