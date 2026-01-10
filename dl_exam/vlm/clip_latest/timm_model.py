@@ -11,7 +11,7 @@ from typing import Tuple, Dict, Any, Optional, Union, List
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from .utils import freeze_batch_norm_2d
+from utils import freeze_batch_norm_2d
 try:
     import timm
     from timm.layers import RotAttentionPool2d

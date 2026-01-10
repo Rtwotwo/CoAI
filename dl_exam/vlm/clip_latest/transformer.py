@@ -14,8 +14,8 @@ from torch.utils.checkpoint import checkpoint
 from collections import OrderedDict
 from typing import Callable, Dict, List, Optional
 from typing import Sequence, Tuple, Type, Union, Literal
-from .utils import to_2tuple, feature_take_indices
-from .pos_embed import get_2d_sincos_pos_embed
+from utils import to_2tuple, feature_take_indices
+from pos_embed import get_2d_sincos_pos_embed
 
 
 """

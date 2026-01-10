@@ -31,7 +31,7 @@ DEFAULT_CONTEXT_LENGTH=77
 def default_bpe():
     """核心作用是实现函数结果缓存,避免重复计算带来的性能损耗"""
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), 
-                        "bpe_simple_vocab_16e6.text.gz")
+                        "bpe_simple_vocab_16e6.txt.gz")
 
 
 @lru_cache()
@@ -508,4 +508,42 @@ class SigLipToeknizer:
                     "gemma": "http://storage.googleapis.com/big_vision/gemma_tokenizer.model",}
     def __init__(self, tokenizer_name: str,
                  context_length: int=64):
-        """"""
+        if 'gemma' in tokenizer_name:
+            from transformers import GemmaTokenizerFast
+            tokenizer_cls = partial(GemmaTokenizerFast, padding_side='right', add_bos_token=False, add_eos_token=True)
+        else:
+            from transformers import T5TokenizerFast
+            tokenizer_cls = partial( T5TokenizerFast, extra_ids=0)
+        # 加载tokenizer的Vocab File文件
+        if tokenizer_name in self.VOCAB_FILES:
+            import tempfile
+            import fsspec
+            vocab_file = self.VOCAB_FILES[tokenizer_name]
+            with tempfile.NamedTemporaryFile('wb') as dst:
+                with fsspec.open(vocab_file, 'rb') as src:
+                    dst.write(src.read())
+                self.tokenizer = tokenizer_cls(dst.name, legacy=False)
+        else: 
+            self.tokenizer = tokenizer_cls(tokenizer_name, legacy=False)
+        self.tokenizer.pad_token_id = 0 if 'gemma' in tokenizer_name else 1
+        self.tokenizer.eos_token_id = 1
+        self.context_length = context_length
+    def save_pretrained(self, dest):
+        self.tokenizer.save_pretrained(dest)
+    def __call__(self, texts: Union[str, List[str]], 
+                 context_length: Optional[int]=None
+                 )->torch.Tensor:
+        """同样的文本清洗方式给默认的tokenizer并且
+        添加小写转换(针对区分大小写的分词器)会使其更稳健,但对细微差别不太敏感"""
+        if isinstance(texts, str): texts = [texts]
+        context_length = context_length or self.context_length
+        assert context_length, f'[ERROR]  {self.tokenizer_name} does not support context_length=None!'
+        # 通过分词器tokenizer转换为固定长度的张量input_ids
+        texts = [canonicalize_text(basic_clean(text)) for text in texts]
+        output = self.tokenizer(
+                    texts,
+                    return_tensors='pt',
+                    max_length=context_length,
+                    padding='max_length',
+                    truncation=True)
+        return output.input_ids

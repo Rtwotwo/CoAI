@@ -21,11 +21,11 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 from functools import partial
 
-from .utils import to_2tuple
-from .hf_model import HFTextEncoder
-from .modified_resnet import ModifiedResNet
-from .timm_model import TimmModel
-from .transformer import (LayerNormFp32, LayerNorm, 
+from utils import to_2tuple
+from hf_model import HFTextEncoder
+from modified_resnet import ModifiedResNet
+from timm_model import TimmModel
+from transformer import (LayerNormFp32, LayerNorm, 
                           QuickGELU, Attention,
                           VisionTransformer,
                           TextTransformer,

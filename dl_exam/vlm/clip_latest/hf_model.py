@@ -18,7 +18,7 @@ except ImportError as e:
     transformers = None
     class BaseModelOutput: pass
     class PretrainedConfig: pass
-from .hf_configs import arch_dict
+from hf_configs import arch_dict
 # 全局类别注册器
 _POOLERS = {}
 
