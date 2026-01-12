@@ -14,9 +14,6 @@
 
 
 # For AIGC
-[submodule "dl_exam/aigc/clones/stablediffusion"]
-	path = dl_exam/aigc/clones/stablediffusion
-	url = https://github.com/Stability-AI/stablediffusion.git
 [submodule "dl_exam/aigc/clones/stable-diffusion-webui"]
 	path = dl_exam/aigc/clones/stable-diffusion-webui
 	url = https://github.com/AUTOMATIC1111/stable-diffusion-webui
