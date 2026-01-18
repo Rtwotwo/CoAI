@@ -22,6 +22,10 @@ except ImportError:
     hvd = None
 
 
+# -----------------------------------------------------------------------
+# 实现了CLIP/CoCa模型的损失计算逻辑,核心包含对比损失(Contrastive Loss)、图文生成
+# 损失(Caption Loss)、蒸馏损失(Distillation Loss)三类损失,同时适配多卡分布式训练场景
+# -----------------------------------------------------------------------
 def gather_features(image_features,
                     text_features,
                     local_loss=False,
@@ -155,8 +159,82 @@ class ClipLoss(nn.Module):
     
 
 class CoCaLoss(ClipLoss):
-    def __init__(self, ):
-        """"""
+    """CoCaLoss类是对ClipLoss(CLIP 模型的对比损失)的扩展,融合了
+    CLIP对比损失和文本生成的交叉熵损失,是CoCa模型的损失函数核心实现
+    clip_loss_weight针对clip模型的对比损失函数的权重
+    caption_loss_weight针对文本生成的交叉熵损失权重因子"""
+    def __init__(self, caption_loss_weight, 
+                 clip_loss_weight,
+                 pad_id=0, # pad_token for open_clip custom tokenizer
+                 local_loss=False,
+                 gather_with_grad=False,
+                 cache_labels=False,
+                 rank=0,
+                 world_size=1,
+                 use_horovod=False):
+        super().__init__(local_loss=local_loss,
+                         gather_with_grad=gather_with_grad,
+                         cache_labels=cache_labels,
+                         rank=rank,
+                         world_size=world_size,
+                         use_horovod=use_horovod)
+        self.clip_loss_weight = clip_loss_weight
+        self.caption_loss_weight = caption_loss_weight
+        self.caption_loss = nn.CrossEntropyLoss(ignore_index=pad_id)
+    def forward(self, image_features, 
+                text_features, 
+                logits, 
+                labels, 
+                logit_scale, 
+                output_dict=False):
+        """根据CLIPLoss的forward方法,实现caption_loss和clip_loss"""
+        # 利用CLIPLoss计算对比损失函数的输出值
+        if self.clip_loss_weight:
+            clip_loss = super().forward(image_features, text_features, logit_scale)
+            clip_loss = clip_loss * self.clip_loss_weight
+        else:
+            clip_loss = torch.tensor(0, device=logits.device)
+        # 计算文本生成损失,实际使用的是nn.CrossEntropyLoss,需要注意的是
+        # 交叉熵损失要求输入形状为[batch, vocab_size, seq_len],需将生成logits的[batch, seq_len, vocab_size]转置
+        caption_loss = self.caption_loss(logits.permute(0, 2, 1), labels)
+        caption_loss = caption_loss * self.caption_loss_weight
+        # 若output_dict=True,返回包含两个损失的字典
+        if output_dict: 
+            return {'contrastive_loss':clip_loss, 'caption_loss':caption_loss}
+        return clip_loss, caption_loss
+
+        
+class DistillClipLoss(ClipLoss):
+    """基于CLIP的对比损失Contrastive Loss扩展的知识蒸馏损失实现,
+    核心是让学生模型模仿教师模型的输出分布,同时保留CLIP原本的图文对比损失"""
+    def dist_loss(self, teacher_logits, student_logits):
+        # 蒸馏损失核心:本质是KL 散度的简化形式(也叫交叉熵损失/负对数似然)
+        # 衡量学生模型输出分布与教师模型输出分布的差异
+        # 教师logits先softmax归一化为概率分布; 学生模型通过先取log再softmax避免数值不稳定
+        return -(teacher_logits.softmax(dim=1) * student_logits.log_softmax(dim=1)).sum(dim=1).mean(dim=0)
+    def forward(self, image_features, 
+                text_features, 
+                logit_scale, 
+                dist_image_features, 
+                dist_text_features, 
+                dist_logit_scale, 
+                output_dict=False):
+        """整体损失计算-输入分为两组特征/缩放因子"""
+        # 教师端: image_features/text_features/logit_scale
+        logits_per_image, logits_per_text = self.get_logits(image_features, text_features, logit_scale)
+        # 学生端: dist_image_features/dist_text_features/dist_logit_scale
+        dist_logits_per_image, dist_logits_per_text = self.get_logits(dist_image_features, dist_text_features, dist_logit_scale)
+        labels = self.get_ground_truth(image_features.device, logits_per_image.shape[0])
+        contrastive_loss = (F.cross_entropy(logits_per_image, labels) + \
+                            F.cross_entropy(logits_per_text, labels)) / 2
+        distill_loss = (self.dist_loss(dist_logits_per_image, logits_per_image) + \
+                        self.dist_loss(dist_logits_per_text, logits_per_text)) / 2
+        if output_dict:
+            return {'contrastive_loss': contrastive_loss, 'distill_loss': distill_loss}
+        return contrastive_loss, distill_loss
         
         
-    
+# -----------------------------------------------------------------------
+# SigLIP 损失函数(Sigmoid Loss for Language-Image Pre-Training),并针对
+# 分布式训练场景多卡/多节点做了优化,主要包含分布式张量交换、损失计算两大核心模块
+# -----------------------------------------------------------------------
