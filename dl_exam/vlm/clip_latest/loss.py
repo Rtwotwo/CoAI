@@ -238,3 +238,109 @@ class DistillClipLoss(ClipLoss):
 # SigLIP 损失函数(Sigmoid Loss for Language-Image Pre-Training),并针对
 # 分布式训练场景多卡/多节点做了优化,主要包含分布式张量交换、损失计算两大核心模块
 # -----------------------------------------------------------------------
+def neighbour_exchange(from_rank, to_rank, tensor, group=None):
+    """基于PyTorch分布式通信的点对点P2P邻居张量交换函数
+    实现两个进程rank之间异步发送/接收张量,最终返回从目标进程接收的张量
+    group 参数指定通信进程组,默认是全局进程组,仅在该组内的进程可通信"""
+    tensor_recv = torch.zeros_like(tensor)
+    # 封装非阻塞发送isend操作,目标进程为to_rank
+    send_op = torch.distributed.P2POp(
+                torch.distributed.isend,
+                tensor,
+                to_rank,
+                group=group,)
+    # 封装非阻塞发送irecv操作,目标进程为from_rank
+    recv_op = torch.distributed.P2POp(
+                torch.distributed.irecv,
+                tensor_recv,
+                from_rank,
+                group=group,)
+    # 批量执行非阻塞收发,batch_isend_irecv批量提交发送和接收操作
+    reqs = torch.distributed.batch_isend_irecv([send_op, recv_op])
+    for req in reqs: req.wait()
+    return tensor_recv
+
+    
+def neighbour_exchange_bidir(left_rank, right_rank, tensor_to_left, tensor_to_right, group=None):
+    """实现双向邻居交换功能:同时向左右两个相邻进程发送张量,并接收来自它们的张量,
+    通过异步发送/接收操作,将本地的tensor_to_left发送给左邻居,tensor_to_right发
+    送给右邻居,同时接收来自左右邻居的对应张量,最后返回接收到的数据"""
+    tensor_from_right = torch.zeros_like(tensor_to_right)
+    tensor_from_left = torch.zeros_like(tensor_to_left)
+    # 封装非阻塞发送isend/irecv操作
+    send_op_left = torch.distributed.P2POp(
+                torch.distributed.isend,
+                tensor_to_left,
+                left_rank,
+                group=group,)
+    send_op_right = torch.distributed.P2POp(
+                torch.distributed.isend,
+                tensor_to_right,
+                right_rank,
+                group=group,)
+    recv_op_left = torch.distributed.P2POp(
+                torch.distributed.irecv,
+                tensor_from_left,
+                left_rank,
+                group=group,)
+    recv_op_right = torch.distributed.P2POp(
+                torch.distributed.irecv,
+                tensor_from_right,
+                right_rank,
+                group=group,)
+    reqs = torch.distributed.batch_isend_irecv([send_op_right, send_op_left, 
+                                                recv_op_right, recv_op_left])
+    for req in reqs: req.wait()
+    return tensor_from_right, tensor_from_left
+
+    
+class NeighbourExchange(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, from_rank, to_rank, group, tensor):
+        """用于执行邻居节点间的张量交换操作,方法接收发送方排名、接收方排名、通信组和张量作为参数"""
+        ctx.group = group
+        ctx.from_rank = from_rank
+        ctx.to_rank = to_rank
+        return neighbour_exchange(from_rank, to_rank, tensor, group)
+    @staticmethod
+    def backward(ctx, grad_output):
+        """在反向传播时,前三个参数to_rank、from_rank、group不需要梯度,返回None;
+        第四个参数grad_output通过NeighbourExchange.apply进行梯度交换操作,实现分布式训练中的梯度传递"""
+        return (None, None, None) + (NeighbourExchange.apply(ctx.to_rank, ctx.from_rank, ctx.group, grad_output), )
+
+
+class NeighbourExchangeBidir(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, left_rank, right_rank, group, tensor_to_left, tensor_to_right):
+        """用于执行双向邻居节点间的张量交换操作,方法接收左邻居排名、右邻居排名、通信组和张量作为参数"""
+        ctx.group = group
+        ctx.left_rank = left_rank
+        ctx.right_rank = right_rank
+        return neighbour_exchange_bidir(left_rank, right_rank, tensor_to_left, tensor_to_right, group=group)
+    @staticmethod
+    def backward(ctx, *grad_outputs):
+        """NeighbourExchangeBidir自定义反向传播函数的backward方法"""
+        return (None, None, None) + NeighbourExchangeBidir.apply(ctx.right_rank, ctx.left_rank, ctx.group, *grad_outputs)
+    
+def neighbour_exchange_with_grad(from_rank, to_rank, tensor, group=None):
+    """用于在分布式训练中进行邻居节点间的数据交换,该函数接收发送方排名、接收方排名、
+    张量数据和通信组作为参数,并通过调用NeighbourExchange类的apply方法来执行具体的交换操作"""
+    return NeighbourExchange.apply(from_rank, to_rank, tensor, group=None)
+
+
+def neighbour_exchange_bidir_with_grad(left_rank, right_rank, tensor_to_left, tensor_to_right, group=None):
+    """用于在分布式训练中进行邻居节点间的数据交换,该函数接收发送方排名、接收方排名、
+    张量数据和通信组作为参数,并通过调用NeighbourExchangeBidir类的apply方法来执行具体的交换操作"""
+    return NeighbourExchangeBidir.apply(left_rank, right_rank, tensor_to_left, tensor_to_right, group=None)
+
+
+class SigLipLoss(nn.Module):
+    """Sigmoid Loss for Language Image Pre-Training (SigLIP) - https://arxiv.org/abs/2303.15343
+    @article{zhai2023sigmoid,
+        title={Sigmoid loss for language image pre-training},
+        author={Zhai, Xiaohua and Mustafa, Basil and Kolesnikov, Alexander and Beyer, Lucas},
+        journal={arXiv preprint arXiv:2303.15343},
+        year={2023}}"""
+    def __init__(self, ):
+        """"""
+        
