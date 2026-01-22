@@ -341,6 +341,82 @@ class SigLipLoss(nn.Module):
         author={Zhai, Xiaohua and Mustafa, Basil and Kolesnikov, Alexander and Beyer, Lucas},
         journal={arXiv preprint arXiv:2303.15343},
         year={2023}}"""
-    def __init__(self, ):
-        """"""
+    def __init__(self, cached_labels: bool=False,
+                 rank: int=0,
+                 world_size: int=1,
+                 dist_impl:Optional[str]=None):
+        super().__init__()
+        self.cached_labels = cached_labels
+        self.rank = rank
+        self.world_size = world_size
+        self.dist_impl = dist_impl or 'bidir'
+        assert self.dist_impl in ('bidir', 'shift', 'reduce', 'gather')
+        # cache state FIXME cache not currently used
+        self.prev_num_logits = 0
+        self.labels = {}
+    def get_groud_truth(self, device, dtype, num_logits, negative_only=False):
+        """形成对角线为+1,其余为-1的标签矩阵,用于对比学习中的正负样本标记"""
+        labels = -torch.ones((num_logits, num_logits), device=device, dtype=dtype)
+        if not negative_only: 
+            labels = 2 * torch.eye(num_logits, device=device, dtype=dtype) + labels
+        return labels
+    def get_logits(self, image_features, text_features, logit_scale, logit_bias=None):
+        """计算图像和文本特征的相似度得分:通过矩阵乘法计算图像特征与文本特征的余弦相似度
+        然后乘以温度缩放参数logit_scale进行缩放,如果提供了偏置参数logit_bias,则将其加到
+        结果上,最后返回计算得到的logits"""
+        logits = logit_scale * image_features @ text_features.T
+        if logit_bias is not None: logits += logit_bias
+        return logits
+    def _loss(self, image_features, text_features, logit_scale, logit_bias=None, negative_only=False):
+        """调用get_ground_truth和get_logits方法计算图像和文本特征之间的相似度得分,
+        然后计算损失函数,返回计算得到的损失值, 参数保持不变"""
+        logits = self.get_logits(image_features, text_features, logit_scale, logit_bias)
+        labels = self.get_groud_truth(image_features.device, 
+                                      image_features.dtype, 
+                                      image_features.shape[0],
+                                      negative_only=negative_only)
+        loss = -F.logsigmoid(labels*logits).sum() / image_features.shape[0]
+        return loss
+    def forward(self, image_features, text_features, logit_scale, logit_bias, output_dict=False):
+        loss = self._loss(image_features, text_features, logit_scale, logit_bias)
+        # 设计不同的分布式策略双向交换/轮转/归约/收集来获取其他进程的文本特征
+        # 与本地图像特征进行对比学习,增强模型训练效果
+        if self.world_size > 1:
+            if self.dist_impl == 'bidir':
+                # bidir双向环形更高效,最高效的通信策略之一
+                right_rank = (self.rank + 1) % self.world_size
+                left_rank = (self.rank - 1 + self.world_size) % self.world_size
+                text_features_to_right = text_features_to_left = text_features
+                # 每次双向通信能收到来自两个方向的文本,因此仅需要(N-1)//2轮次通信
+                num_bidir, remainder = divmod(self.world_size-1, 2)
+                for i in range(num_bidir):
+                    text_features_recv = neighbour_exchange_bidir_with_grad(
+                        left_rank, 
+                        right_rank,
+                        text_features_to_left,
+                        text_features_to_right)
+                    for f in text_features_recv:
+                        loss += self.loss(image_features,
+                                          f, 
+                                          logit_scale, 
+                                          logit_bias, 
+                                          negative_only=True)
+                    text_features_to_left, text_features_to_right = text_features_recv
+                if remainder:
+                    text_features_recv = neighbour_exchange_with_grad(
+                        left_rank, 
+                        right_rank,
+                        text_features_to_right)
+                    loss += self.loss(
+                        image_features,
+                        text_features_recv,
+                        logit_scale,
+                        logit_bias,
+                        negative_only=True)        
+            elif self.dist_impl == 'shift':
+                
+            elif self.dist_impl == 'reduce':
+
+            elif self.dist_impl == 'gather':
         
+        return loss
