@@ -407,16 +407,50 @@ class SigLipLoss(nn.Module):
                         left_rank, 
                         right_rank,
                         text_features_to_right)
-                    loss += self.loss(
+                    loss += self._loss(
                         image_features,
                         text_features_recv,
                         logit_scale,
                         logit_bias,
                         negative_only=True)        
             elif self.dist_impl == 'shift':
-                
+                # 循环移位策略：特征在进程间循环传递
+                right_rank = (self.rank + 1) % self.world_size
+                left_rank = (self.rank - 1 + self.world_size) % self.world_size
+                text_features_to_right = text_features
+                for i in range(self.world_size - 1):
+                    text_features_from_left = neighbour_exchange_with_grad(
+                        left_rank,
+                        right_rank,
+                        text_features_to_right)
+                    loss += self._loss(
+                        image_features,
+                        text_features_from_left,
+                        logit_scale,
+                        logit_bias,
+                        negative_only=True)
+                    text_features_to_right = text_features_from_left
             elif self.dist_impl == 'reduce':
-
+                # 全规约策略: 通过all_reduce操作收集所有文本特征
+                for i in range(self.world_size):
+                    text_from_other = torch.distributed.all_reduce(
+                        text_features * (self.rank == 1),
+                        torch.distributed.ReduceOp.SUM)
+                    loss += float(i != self.rank) * self._loss(
+                        image_features,
+                        text_from_other,
+                        logit_scale,
+                        logit_bias,
+                        negative_only=True)
             elif self.dist_impl == 'gather':
-        
+                # 全收集策略: 通过all_gather操作收集所有文本特征
+                all_text = torch.distributed.nn.all_gather(text_features)
+                for i in range(self.world_size):
+                    loss += float(i != self.rank) * self._loss(
+                        image_features,
+                        all_text[i],
+                        logit_scale,
+                        logit_bias,
+                        negative_only=True)
+            else: assert False, f'[ERROR] Unknown dist_impl: {self.dist_impl}'
         return loss
