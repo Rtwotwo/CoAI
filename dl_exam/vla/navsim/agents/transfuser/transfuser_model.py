@@ -85,28 +85,29 @@ class TransfuserModel(nn.Module):
         batch_size = status_feature.shape[0]
         # Process camera and lidar features through backbone network to get BEV features
         bev_feature_upscale, bev_feature, _ = self._backbone(camera_features, lidar_feature)
+        # Downscale BEV features and reshape for transformer processing
+        bev_feature = self._bev_downscale(bev_feature).flatten(-2, -1)
+        bev_feature = bev_feature.permute(0, 2, 1)
+        status_encoding = self._status_encoding(status_feature)
+        # 
+
+
+class AgentHead(nn.Module):
+    """Agent head for Transfuser model: Bounding Box prediction Head"""
+    def __init__(self, num_agents:int, 
+                 d_ffn: int,
+                 d_model: int):
+        """Initialize the agent head
+        num_agents: maximum number of agents to predict
+        d_ffn: feed-forward network dimension
+        d_model: input features dimension"""
+        super(AgentHead, self).__init__()
+        self._num_agents = num_agents
+        self._d_ffn = d_ffn
+        self._d_model = d_model
+
+        self._mlp_states = nn.Sequential(
+            nn.Linear(self._d_model, self._d_ffn),
+            nn.ReLU(),
+            nn.Linear(self._d_ffn, BoundingBox2DIndex.size()),)
         
-
-
-# class AgentHead(nn.Module):
-#     """Agent head for Transfuser model: Bounding Box prediction Head"""
-#     def __init__(self, num_agents:int, 
-#                  d_ffn: int,
-#                  d_model: int):
-#         """Initialize the agent head
-#         num_agents: maximum number of agents to predict
-#         d_ffn: feed-forward network dimension
-#         d_model: input features dimension"""
-#         super(AgentHead, self).__init__()
-#         self._num_agents = num_agents
-#         self._d_ffn = d_ffn
-#         self._d_model = d_model
-
-#         self._mlp_states = nn.Sequential(
-#             nn.Linear(self._d_model, self._d_ffn),
-#             nn.ReLU(),
-#             nn.Linear(self._d_ffn, BoundingBox2DIndex.size()),)
-        
-
-        
-
