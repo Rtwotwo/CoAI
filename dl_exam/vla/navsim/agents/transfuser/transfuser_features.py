@@ -39,5 +39,39 @@ class TransfuserFeatureBuilder(AbstractFeatureBuilder):
         :param config: global config dataclass of TransFuser"""
         self._config = config
     def get_unique_name(self,)->str:
-        """"""
+        """Inherited, see superclass"""
         return "transfuser_feature"
+    def compute_features(self, agent_input: AgentInput
+                         )->Dict[str, torch.Tensor]:
+        """Build the input features for camera/lidar/status features
+        for TransFuser agent to processing data and extracting targets"""
+        features = {}
+        features["camera_feature"] = self._get_camera_feature(agent_input)
+        if not self._config.use_lidar: 
+            features["lidar_feature"] = self._get_camera_feature(agent_input)
+        features["status_feature"] = torch.concatenate([
+            torch.tensor(agent_input.ego_status[-1].driving_command, dtype=torch.float32),
+            torch.tensor(agent_input.ego_status[-1].ego_velocity, dtype=torch.float32),
+            torch.tensor(agent_input.ego_status[-1].ego_acceleration, dtype=torch.float32)])
+        return features
+    def _get_camera_feature(self, agent_input: AgentInput)->torch.Tensor:
+        """Extract stitched camera from AgentInput
+        agent_input: input dataclass, stitched front view image as torch tensor"""
+        cameras = agent_input.cameras[-1]
+        # crop to ensure 4:1 aspect ratio
+        l0 = cameras.cam_l0.image[28:-28, 416:-416]
+        f0 = cameras.cam_f0.image[28:-28]
+        r0 = cameras.cam_r0.image[28:-28, 416:-416]
+        # stitch images l0, r0, f0 together
+        stitched_image = np.concatenate([l0, f0, r0],axis=1)
+        # resize the stitched image and convert to torch tensor
+        resized_image = cv2.resize(stitched_image, (2048, 512))
+        tensor_image = transforms.ToTensor()(resized_image)
+        return tensor_image
+    def _get_lidar_feature(self, agent_input: AgentInput)->torch.Tensor:
+        """Compute LiDAR feature as 2D histogram, according to Transfuser
+        :param agent_input: input dataclass
+        :return: LiDAR histogram as torch tensors"""
+        # for lidar, only consider (x, y, z) & swap axes for (N, 3) numpy array
+        lidar_pc = agent_input.lidars[-1].lidar_pc[LidarIndex.POSITION].T
+        # 
