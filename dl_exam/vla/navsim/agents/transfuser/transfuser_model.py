@@ -92,22 +92,22 @@ class TransfuserModel(nn.Module):
         # 
 
 
-class AgentHead(nn.Module):
-    """Agent head for Transfuser model: Bounding Box prediction Head"""
-    def __init__(self, num_agents:int, 
-                 d_ffn: int,
-                 d_model: int):
-        """Initialize the agent head
-        num_agents: maximum number of agents to predict
-        d_ffn: feed-forward network dimension
-        d_model: input features dimension"""
-        super(AgentHead, self).__init__()
-        self._num_agents = num_agents
-        self._d_ffn = d_ffn
-        self._d_model = d_model
+# class AgentHead(nn.Module):
+#     """Agent head for Transfuser model: Bounding Box prediction Head"""
+#     def __init__(self, num_agents:int, 
+#                  d_ffn: int,
+#                  d_model: int):
+#         """Initialize the agent head
+#         num_agents: maximum number of agents to predict
+#         d_ffn: feed-forward network dimension
+#         d_model: input features dimension"""
+#         super(AgentHead, self).__init__()
+#         self._num_agents = num_agents
+#         self._d_ffn = d_ffn
+#         self._d_model = d_model
 
-        self._mlp_states = nn.Sequential(
-            nn.Linear(self._d_model, self._d_ffn),
-            nn.ReLU(),
-            nn.Linear(self._d_ffn, BoundingBox2DIndex.size()),)
+#         self._mlp_states = nn.Sequential(
+#             nn.Linear(self._d_model, self._d_ffn),
+#             nn.ReLU(),
+#             nn.Linear(self._d_ffn, BoundingBox2DIndex.size()),)
         

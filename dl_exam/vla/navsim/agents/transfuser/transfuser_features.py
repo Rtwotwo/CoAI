@@ -74,4 +74,69 @@ class TransfuserFeatureBuilder(AbstractFeatureBuilder):
         :return: LiDAR histogram as torch tensors"""
         # for lidar, only consider (x, y, z) & swap axes for (N, 3) numpy array
         lidar_pc = agent_input.lidars[-1].lidar_pc[LidarIndex.POSITION].T
-        # 
+        # design splat_points function to create histogram
+        def splat_points(point_cloud):
+            # use 256x256 grid
+            xbins = np.linspace(self._config.lidar_min_x,
+                                self._config.lidar_max_x,
+                                (self._config.lidar_max_x - self._config.lidar_min_x)*int(self._config.pixels_per_meter) + 1)
+            ybins = np.linspace(self._config.lidar_min_y,
+                                self._config.lidar_max_y,
+                                (self._config.lidar_max_y - self._config.lidar_min_y)*int(self._config.pixels_per_meter) + 1)
+            # compute histogram by point_cloud and xbins/ybins
+            hist = np.histogram2d(point_cloud[:, :2], bins=[xbins, ybins])[0]
+            hist[hist > self._config.hist_max_per_pixel] = self._config.hist_max_per_pixel
+            # make normalization for histogram data
+            overhead_splat = hist / self._config.hist_max_per_pixel
+            return overhead_splat
+        # remove points above the vehicle
+        lidar_pc = lidar_pc[lidar_pc[..., 2] < self._config.max_height_lidar]
+        below = lidar_pc[lidar_pc[..., 2] <= self._config.lidar_split_height]
+        above = lidar_pc[lidar_pc[..., 2] > self._config.lidar_split_height]
+        above_features = splat_points(above)
+        # if activating use_ground_plane, use below points
+        if self._config.use_ground_plane:
+            below_features = splat_points(below)
+            features = np.stack([below_features, above_features], axis=-1)
+        else:
+            features = np.stack([above_features], axis=-1)
+        # convert features shape as [C, H, W] to output torch tensor
+        features = np.transpose(features, (2, 0, 1)).astype(np.float32)
+        return torch.tensor(features)
+    
+
+class TransfuserTargetBuilder(AbstractTargetBuilder):
+    """Ouput Target Builder for TransFuser"""
+    def __init__(self, trajectory_sampling: TrajectorySampling,
+                 config: TransfuserConfig):
+        """Initializes the TargetBuilder
+        trajectory_sampling: trajectory sampling specification
+        config: global config dataclass of TransFuser"""
+        self._trajectory_sampling = trajectory_sampling
+        self._config = config
+    def get_unique_name(self,)->str:
+        """Inherited, see superclass"""
+        return "transfuser_target_builder"
+    def compute_targets(self, scene: Scene)->Dict[str, torch.Tensor]:
+        """Calculate the target data for the given scenario, including 
+        trajectories, agent states, agent labels, and BEV semantic maps
+        trajectory: the future trajectory of the agent, shape [num_poses, ...];
+        agent_states: the states of the agent;"""
+        trajectory = torch.tensor(scene.get_future_trajectory(
+                num_trajectory_frames=self._trajectory_sampling.num_poses).poses)
+        frame_idx = scene.scene_metadata.num_history_frames - 1
+        # Extract the annotation information of the current frame and the ego-vehicle's posture
+        annotations = scene.frames[frame_idx].annotations
+        ego_pose = StateSE2(*scene.frames[frame_idx].ego_status.ego_pose)
+        # Compute the ego_agent states and labels
+        agent_states, agent_labels = self._compute_agent_targets(annotations)
+        bev_semantic_map = self._compute_bev_semantic_map(annotations, scene.map_api, ego_pose)
+        return {'trajectory': trajectory,
+                'agent_states': agent_states,
+                'agent_labels': agent_labels,
+                'bev_semantic_map': bev_semantic_map,}
+    def _compute_agent_targets(self, annotations: Annotations
+                        )->Tuple[torch.Tensor, torch.Tensor]:
+        """"""
+        
+
