@@ -137,6 +137,121 @@ class TransfuserTargetBuilder(AbstractTargetBuilder):
                 'bev_semantic_map': bev_semantic_map,}
     def _compute_agent_targets(self, annotations: Annotations
                         )->Tuple[torch.Tensor, torch.Tensor]:
+        """Extract the 2D bounding box information of the vehicle from the annotation data, and 
+        return the bounding box values in tensor form and binary labels"""
+        max_agents = self._config.num_bounding_boxes
+        agent_states_list: List[npt.NDArray[np.float32]] = []
+        def _xy_in_lidar(x:float, y:float, config:TransfuserConfig)->bool:
+            """Extract the 2D bounding box information of the vehicle from the 
+            annotation data, and return the bounding box values in tensor form and binary labels"""
+            return (config.lidar_min_x <= x <= config.lidar_max_x) and (config.lidar_min_y <= y <= config.lidar_max_y)
+        # Iterate through all bounding boxes and names, and filter out vehicle agents that meet the criteria
+        # the agent states contain the x/y/heading/length/width
+        for box, name in zip(annotations.boxes, annotations.names):
+            box_x, box_y, box_heading, box_length, box_width = (
+                box[BoundingBoxIndex.X],
+                box[BoundingBoxIndex.Y],
+                box[BoundingBoxIndex.HEADING],
+                box[BoundingBoxIndex.LENGTH],
+                box[BoundingBoxIndex.WIDTH],)
+            # Only consider the name "vehicle" and check the center whether is the bounding box
+            if name=='vehicle' and _xy_in_lidar(box_x, box_y, self._config):
+                agent_states_list.append(np.array(
+                    [box_x, box_y, box_heading, box_length, box_width], dtype=np.float32))
+        agents_states_arr = np.array(agent_states_list)
+        # Initialize the agent states and annotations for output
+        agent_states = np.zeros((max_agents, BoundingBox2DIndex.size()), dtype=np.float32)
+        agent_labels = np.zeros(max_agents, dtype=bool)
+        # 
+        if len(agents_states_arr) > 0:
+            distances = np.linalg.norm(agents_states_arr[..., BoundingBoxIndex.POINT2D], axis=-1)
+            argsort = np.argsort(distances)[:max_agents]
+            # filter the detections in the cameras and lidar
+            agents_states_arr = agents_states_arr[argsort]
+            agent_states[:, len(agents_states_arr)] = agents_states_arr
+            agent_states[: len(agents_states_arr)] = True
+        return torch.tensor(agent_states), torch.tensor(agent_labels)
+    def _compute_bev_semantic_map(self, annotations: Annotations, 
+                                  map_api: AbstractMap,
+                                  ego_pose: StateSE2
+                                  )->torch.Tensor:
+        """Create semantic map in the BEV space, annotations: Annotation classes
+        map_api: Map interface of nuPlan used to access map elements
+        ego_pose: Ego vehicle pose in the global coordinate frame"""
+        # Initialize an empty BEV map for zemantic map with zeros
+        bev_semantic_map = np.zeros(self._config.bev_semantic_frame, dtype=np.int64)
+        # Iterate through all the bev semantic classes defined in the config
+        for label, (entity_type, layers) in self._config.bev_semantic_classes.items():
+            if entity_type=='polygon':
+                entity_mask = self._compute_map_polygon_mask(map_api, ego_pose, layers)
+            elif entity_type=='linestring':
+                entity_mask = self._compute_linestring_mask(map_api, ego_pose, layers)
+            else:
+                entity_mask = self._compute_box_mask(annotations, layers)
+            # Assign labels to positions in the BEV map where the entity_mask is
+            bev_semantic_map[entity_mask] = label
+        # convert the numpy ndarray to torch tensor
+        return torch.tensor(bev_semantic_map)
+    def _compute_map_polygon_mask(self, map_api: AbstractMap,
+                                  ego_pose: StateSE2,
+                                  layers: List[SemanticMapLayer]
+                                  )->npt.NDArray[np.bool_]:
+        """Compute binary mask given a map layer class
+        map_api: map interface of nuPlan; ego_pose: ego pose in the map frame; 
+        layers: map layers; Returns: binary mask as numpy array"""
+        # Get map objects within a specified radius around the ego vehicle
+        map_object_dict = map_api.get_proximal_map_objects(
+            point=ego_pose.point, radius=self._config.bev_radius, layers=layers)
+        # Initialize a zero mask in the shape of the BEV map
+        map_polygon_mask = np.zeros(self._config.bev_semantic_frame[::-1], dtype=np.uint8)
+        for layer in layers:
+            # iterate through each layer of the map_object_dict
+            for map_object in map_object_dict[layer]:
+                polygon: Polygon = self._geometry_local_coords(map_object.geometry, ego_pose)
+                exterior = np.array(polygon.exterior.coords).reshape((-1, 1, 2))
+                exterior = self._coords_to_pixel(exterior)
+                cv2.fillPoly(map_polygon_mask, [exterior], color=255)
+        # opencv has origin on top-left corner
+        map_polygon_mask = np.rot90(map_polygon_mask)[::-1]
+        return map_polygon_mask > 0
+    def _compute_map_linestring_mask(self, map_api: AbstractMap,
+                                     ego_pose: StateSE2, 
+                                     layers: List[SemanticMapLayer],
+                                     )->npt.NDArray[np.bool_]:
+        """compute binary of linestring mask given a map layer class
+        map_api: map interface of nuPlam; ego_pose: ego pose in global frame
+        layers: list of map layers; Returns: binary mask as numpy array"""
+        map_object_dict = map_api.get_proximal_map_objects(
+            point=ego_pose.point, radius=self._config.bev_radius, layers=layers)
+        map_linestring_mask = np.zeros(self._config.bev_semantic_frame[::-1], dtype=np.uint8)
+        for layer in layers:
+            for map_object in map_object_dict[layer]:
+                linestring: LineString = self._geometry_local_coords(map_object.baseline_path.linestring, ego_pose)
+                points = np.array(linestring.coords).reshape((-1, 1, 2))
+                points = self._coords_to_pixel(points)
+                cv2.polylines(map_linestring_mask, 
+                              [points],
+                              isClosed=False,
+                              color=255,
+                              thickness=2)
+        # Opence has origin on top-left corner
+        map_linestring_mask = np.rot90(map_linestring_mask)[::-1]
+        return map_linestring_mask > 0
+    def _compute_box_mask(self, annotations: Annotations, 
+                          layers: TrackedObjectType,
+                          )->npt.NDArray[np.bool_]:
         """"""
+        box_polygon_mask = np.zeros(self._config.bev_semantic_frame[::-1], dtype=np.uint8)
+        for name_value, box_value in zip(annotations.names, annotations.boxes):
+            agent_type = tracked_object_types[name_value]
+            if agent_type in layers:
+                
+
         
+
+            
+
+
+
+
 
