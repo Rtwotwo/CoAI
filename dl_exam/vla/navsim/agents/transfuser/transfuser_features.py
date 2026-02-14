@@ -245,8 +245,15 @@ class TransfuserTargetBuilder(AbstractTargetBuilder):
         for name_value, box_value in zip(annotations.names, annotations.boxes):
             agent_type = tracked_object_types[name_value]
             if agent_type in layers:
-                
-
+                # box_value = (x, y, z, length, width, height, yaw) need to be add intenum
+                x, y, heading = box_value[0], box_value[1], box_value[-1]
+                box_length, box_width, box_height = (box_value[3], box_value[4], box_value[5])
+                agent_box = OrientedBox(StateSE2(x, y, heading), box_length, box_width, box_height)
+                exterior = np.array(agent_box.geometry.exterior.coords).reshape((-1, 1, 2))
+                exterior = self._coords_to_pixel(exterior)
+                cv2.fillPoly(box_polygon_mask, [exterior], color=255)
+            # opencv has origin on top-left corner
+            
         
 
             

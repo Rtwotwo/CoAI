@@ -71,21 +71,18 @@
 	
 
 # For VLM 
-[submodule "dl_exam/vlm/clones/CLIP"]
-	path = dl_exam/vlm/clones/CLIP
-	url = https://github.com/openai/CLIP.git
 [submodule "dl_exam/vlm/clones/open_clip"]
 	path = dl_exam/vlm/clones/open_clip
 	url = https://github.com/mlfoundations/open_clip.git
 [submodule "dl_exam/vlm/clones/BLIP"]
 	path = dl_exam/vlm/clones/BLIP
 	url = https://github.com/salesforce/BLIP
-[submodule "dl_exam/vlm/clones/VLM-R1"]
-	path = dl_exam/vlm/clones/VLM-R1
-	url = https://github.com/om-ai-lab/VLM-R1.git
-[submodule "dl_exam/vlm/clones/CoCa-pytorch"]
-	path = dl_exam/vlm/clones/CoCa-pytorch
-	url = https://github.com/lucidrains/CoCa-pytorch.git
+[submodule "dl_exam/vlm/clones/LLaVA"]
+	path = dl_exam/vlm/clones/LLaVA
+	url = https://github.com/haotian-liu/LLaVA.git
+[submodule "dl_exam/vlm/clones/LAVIS"]
+	path = dl_exam/vlm/clones/LAVIS
+	url = https://github.com/salesforce/LAVIS.git
 
 
 # For VLA
