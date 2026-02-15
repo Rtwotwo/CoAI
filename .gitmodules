@@ -1,100 +1,100 @@
 # For 3D
-[submodule "dl_exam/3d/clones/dust3r"]
-	path = dl_exam/3d/clones/dust3r
+[submodule "3d/clones/dust3r"]
+	path = 3d/clones/dust3r
 	url = https://github.com/naver/dust3r
-[submodule "dl_exam/3d/clones/vggt"]
-	path = dl_exam/3d/clones/vggt
+[submodule "3d/clones/vggt"]
+	path = 3d/clones/vggt
 	url = https://github.com/facebookresearch/vggt.git
-[submodule "dl_exam/3d/clones/Depth-Anything-3"]
-	path = dl_exam/3d/clones/Depth-Anything-3
+[submodule "3d/clones/Depth-Anything-3"]
+	path = 3d/clones/Depth-Anything-3
 	url = https://github.com/ByteDance-Seed/Depth-Anything-3
-[submodule "dl_exam/3d/clones/map-anything"]
-	path = dl_exam/3d/clones/map-anything
+[submodule "3d/clones/map-anything"]
+	path = 3d/clones/map-anything
 	url = https://github.com/facebookresearch/map-anything.git
 
 
 # For AIGC
-[submodule "dl_exam/aigc/clones/stable-diffusion-webui"]
-	path = dl_exam/aigc/clones/stable-diffusion-webui
+[submodule "agc/clones/stable-diffusion-webui"]
+	path = agc/clones/stable-diffusion-webui
 	url = https://github.com/AUTOMATIC1111/stable-diffusion-webui
-[submodule "dl_exam/aigc/clones/diffusers"]
-	path = dl_exam/aigc/clones/diffusers
+[submodule "agc/clones/diffusers"]
+	path = agc/clones/diffusers
 	url = https://github.com/huggingface/diffusers
-[submodule "dl_exam/aigc/clones/TRELLIS.2"]
-	path = dl_exam/aigc/clones/TRELLIS.2
+[submodule "agc/clones/TRELLIS.2"]
+	path = agc/clones/TRELLIS.2
 	url = https://github.com/microsoft/TRELLIS.2
 
 
 # For BASE
-[submodule "dl_exam/base/clones/transformers"]
-	path = dl_exam/base/clones/transformers
+[submodule "base/clones/transformers"]
+	path = base/clones/transformers
 	url = https://github.com/huggingface/transformers.git
-[submodule "dl_exam/base/clones/peft"]
-	path = dl_exam/base/clones/peft
+[submodule "base/clones/peft"]
+	path = base/clones/peft
 	url = https://github.com/huggingface/peft
 
 
 # For NLP
-[submodule "dl_exam/nlp/clones/vllm"]
-	path = dl_exam/nlp/clones/vllm
+[submodule "nlp/clones/vllm"]
+	path = nlp/clones/vllm
 	url = https://github.com/vllm-project/vllm.git
-[submodule "dl_exam/nlp/clones/DeepLearningExamples"]
-	path = dl_exam/nlp/clones/DeepLearningExamples
+[submodule "nlp/clones/DeepLearningExamples"]
+	path = nlp/clones/DeepLearningExamples
 	url = https://github.com/NVIDIA/DeepLearningExamples.git
-[submodule "dl_exam/nlp/clones/LLaVA-RLHF"]
-	path = dl_exam/nlp/clones/LLaVA-RLHF
+[submodule "nlp/clones/LLaVA-RLHF"]
+	path = nlp/clones/LLaVA-RLHF
 	url = https://github.com/llava-rlhf/LLaVA-RLHF.git
-[submodule "dl_exam/nlp/clones/FasterTransformer"]
-	path = dl_exam/nlp/clones/FasterTransformer
+[submodule "nlp/clones/FasterTransformer"]
+	path = nlp/clones/FasterTransformer
 	url = https://github.com/ImanHosseini/FasterTransformer.git
-[submodule "dl_exam/nlp/clones/UER-py"]
-	path = dl_exam/nlp/clones/UER-py
+[submodule "nlp/clones/UER-py"]
+	path = nlp/clones/UER-py
 	url = https://github.com/dbiir/UER-py.git
 
 
 # For RL
-[submodule "dl_exam/rl/clones/baselines"]
-	path = dl_exam/rl/clones/baselines
+[submodule "rl/clones/baselines"]
+	path = rl/clones/baselines
 	url = https://github.com/openai/baselines.git
-[submodule "dl_exam/rl/clones/cleanrl"]
-	path = dl_exam/rl/clones/cleanrl
+[submodule "rl/clones/cleanrl"]
+	path = rl/clones/cleanrl
 	url = https://github.com/vwxyzjn/cleanrl.git
-[submodule "dl_exam/rl/clones/tianshou"]
-	path = dl_exam/rl/clones/tianshou
+[submodule "rl/clones/tianshou"]
+	path = rl/clones/tianshou
 	url = https://github.com/thu-ml/tianshou.git
-[submodule "dl_exam/vla/clones/lerobot"]
-	path = dl_exam/vla/clones/lerobot
+[submodule "vla/clones/lerobot"]
+	path = vla/clones/lerobot
 	url = https://github.com/huggingface/lerobot
-[submodule "dl_exam/rl/clones/stable-baselines3"]
-	path = dl_exam/rl/clones/stable-baselines3
+[submodule "rl/clones/stable-baselines3"]
+	path = rl/clones/stable-baselines3
 	url = https://github.com/DLR-RM/stable-baselines3.git
-	
+
 
 # For VLM 
-[submodule "dl_exam/vlm/clones/open_clip"]
-	path = dl_exam/vlm/clones/open_clip
+[submodule "vlm/clones/open_clip"]
+	path = vlm/clones/open_clip
 	url = https://github.com/mlfoundations/open_clip.git
-[submodule "dl_exam/vlm/clones/BLIP"]
-	path = dl_exam/vlm/clones/BLIP
+[submodule "vlm/clones/BLIP"]
+	path = vlm/clones/BLIP
 	url = https://github.com/salesforce/BLIP
-[submodule "dl_exam/vlm/clones/LLaVA"]
-	path = dl_exam/vlm/clones/LLaVA
+[submodule "vlm/clones/LLaVA"]
+	path = vlm/clones/LLaVA
 	url = https://github.com/haotian-liu/LLaVA.git
-[submodule "dl_exam/vlm/clones/LAVIS"]
-	path = dl_exam/vlm/clones/LAVIS
+[submodule "vlm/clones/LAVIS"]
+	path = vlm/clones/LAVIS
 	url = https://github.com/salesforce/LAVIS.git
 
 
 # For VLA
-[submodule "dl_exam/vla/clones/RoboticsDiffusionTransformer"]
-	path = dl_exam/vla/clones/RoboticsDiffusionTransformer
+[submodule "vla/clones/RoboticsDiffusionTransformer"]
+	path = vla/clones/RoboticsDiffusionTransformer
 	url = https://github.com/thu-ml/RoboticsDiffusionTransformer.git
-[submodule "dl_exam/vla/clones/robotics_transformer"]
-	path = dl_exam/vla/clones/robotics_transformer
+[submodule "vla/clones/robotics_transformer"]
+	path = vla/clones/robotics_transformer
 	url = https://github.com/google-research/robotics_transformer
-[submodule "dl_exam/vla/clones/dexbotic"]
-	path = dl_exam/vla/clones/dexbotic
+[submodule "vla/clones/dexbotic"]
+	path = vla/clones/dexbotic
 	url = https://github.com/Dexmal/dexbotic
-[submodule "dl_exam/vla/clones/openvla-oft"]
-	path = dl_exam/vla/clones/openvla-oft
+[submodule "vla/clones/openvla-oft"]
+	path = vla/clones/openvla-oft
 	url = https://github.com/moojink/openvla-oft
