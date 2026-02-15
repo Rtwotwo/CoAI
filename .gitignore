@@ -6,3 +6,11 @@ vlm/papers/
 base/papers/
 3d/papers/
 
+# ignore clones floder
+agc/clones/
+nlp/clones/
+vla/clones/
+vlm/clones/
+base/clones/
+3d/clones/
+
