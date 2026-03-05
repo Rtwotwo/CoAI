@@ -12,26 +12,6 @@ import torch.distributed as dist
 from typing import Union, Tuple, List, Optional
 
 
-NORM_CONFIGS = {'InstanceNorm': '风格迁移、GAN、图像处理',
-                'GroupNorm': '小批量训练、目标检测Mask R-CNN',
-                'SyncBatchNorm': '多卡分布式训练',
-                'BatchRenorm': '小批量场景下的稳定性改进',
-                'SwitchableNorm': '多任务学习,结合BN/IN/LN',  
-                'AdaIN': '神经风格迁移',
-                'Conditional InstanceNorm': '条件生成模型、条件GAN',
-                'WeightNorm': '生成模型、RNN训练稳定性',
-                'SpectralNorm': 'GAN判别器,权重谱范数约束',
-                'RMSNorm': 'Transformer、NLP模型',
-                'FRN': '图像分类、分割任务',
-                'Local Response Norm': '早期CNNAlexNet',
-                'PixelNorm': '生成模型StyleGAN',
-                'ScaleNorm': 'Transformer、注意力机制',
-                'PowerNorm': '图像分类任务',
-                'IterNorm/Decorrelated Norm': '特征去相关性增强',
-                'GroupWhitening': '色彩归一化、图像增强',
-                'EvoNorm': '图像分类,可演变的归一化' }
-
-
 class LayerNorm(nn.Module):
     """计算该样本在所有通道+空间位置上的均值和方差
     LN(x)=gamma·(x-E(x))/sqrt(Var(x)+eps)+bias

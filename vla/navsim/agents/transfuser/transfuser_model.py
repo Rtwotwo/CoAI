@@ -82,6 +82,7 @@ class TransfuserModel(nn.Module):
             status_feature = status_feature[-1]
         if isinstance(camera_features, list):
             camera_features = camera_features[-1]
+
         batch_size = status_feature.shape[0]
         # Process camera and lidar features through backbone network to get BEV features
         bev_feature_upscale, bev_feature, _ = self._backbone(camera_features, lidar_feature)
@@ -89,25 +90,39 @@ class TransfuserModel(nn.Module):
         bev_feature = self._bev_downscale(bev_feature).flatten(-2, -1)
         bev_feature = bev_feature.permute(0, 2, 1)
         status_encoding = self._status_encoding(status_feature)
-        # 
+        # build pair of the query and key-value and add learnable positional embeddings
+        keyval = torch.concatenate([bev_feature, status_encoding[:, None]], dim=1)
+        keyval += self._keyval_embedding.weight[None, ...]
+        query = self._query_embedding.weight[None, ...].repeat(batch_size, 1, 1)
+        query_out = self._tf_decoder(query, keyval)
+        # Generate BEV semantic maps and segmentation query vectors
+        bev_semantic_map = self._bev_semantic_head(bev_feature_upscale)
+        trajectory_query, agents_query = query_out.split(self._query_splits, dim=1)
+        # Integrate the outputs of each prediction head and return them
+        output: Dict[str, torch.Tensor] = {'bev_semantic_map': bev_semantic_map}
+        trajectory = self._trajectory_head(trajectory_query)
+        output.update(trajectory)
+        agents = self._agent_head(agents_query)
+        output.update(agents)
+        return output
 
 
-# class AgentHead(nn.Module):
-#     """Agent head for Transfuser model: Bounding Box prediction Head"""
-#     def __init__(self, num_agents:int, 
-#                  d_ffn: int,
-#                  d_model: int):
-#         """Initialize the agent head
-#         num_agents: maximum number of agents to predict
-#         d_ffn: feed-forward network dimension
-#         d_model: input features dimension"""
-#         super(AgentHead, self).__init__()
-#         self._num_agents = num_agents
-#         self._d_ffn = d_ffn
-#         self._d_model = d_model
+class AgentHead(nn.Module):
+    """Agent head for Transfuser model: Bounding Box prediction Head"""
+    def __init__(self, num_agents:int, 
+                 d_ffn: int,
+                 d_model: int):
+        """Initialize the agent head
+        num_agents: maximum number of agents to predict
+        d_ffn: feed-forward network dimension
+        d_model: input features dimension"""
+        super(AgentHead, self).__init__()
+        self._num_agents = num_agents
+        self._d_ffn = d_ffn
+        self._d_model = d_model
 
-#         self._mlp_states = nn.Sequential(
-#             nn.Linear(self._d_model, self._d_ffn),
-#             nn.ReLU(),
-#             nn.Linear(self._d_ffn, BoundingBox2DIndex.size()),)
+        self._mlp_states = nn.Sequential(
+            nn.Linear(self._d_model, self._d_ffn),
+            nn.ReLU(),
+            nn.Linear(self._d_ffn, BoundingBox2DIndex.size()),)
         

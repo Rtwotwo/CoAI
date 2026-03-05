@@ -164,7 +164,7 @@ class TransfuserTargetBuilder(AbstractTargetBuilder):
         agent_labels = np.zeros(max_agents, dtype=bool)
         # 
         if len(agents_states_arr) > 0:
-            distances = np.linalg.norm(agents_states_arr[..., BoundingBoxIndex.POINT2D], axis=-1)
+            distances = np.linalg.norm(agents_states_arr[..., BoundingBox2DIndex.POINT2D], axis=-1)
             argsort = np.argsort(distances)[:max_agents]
             # filter the detections in the cameras and lidar
             agents_states_arr = agents_states_arr[argsort]
@@ -240,7 +240,10 @@ class TransfuserTargetBuilder(AbstractTargetBuilder):
     def _compute_box_mask(self, annotations: Annotations, 
                           layers: TrackedObjectType,
                           )->npt.NDArray[np.bool_]:
-        """"""
+        """Compute binary of bounding boxes in BEV space
+        :param annotations: annotation dataclass
+        :param layers: bounding box labels to include
+        :return: binary mask as numpy array"""
         box_polygon_mask = np.zeros(self._config.bev_semantic_frame[::-1], dtype=np.uint8)
         for name_value, box_value in zip(annotations.names, annotations.boxes):
             agent_type = tracked_object_types[name_value]
@@ -252,13 +255,94 @@ class TransfuserTargetBuilder(AbstractTargetBuilder):
                 exterior = np.array(agent_box.geometry.exterior.coords).reshape((-1, 1, 2))
                 exterior = self._coords_to_pixel(exterior)
                 cv2.fillPoly(box_polygon_mask, [exterior], color=255)
-            # opencv has origin on top-left corner
-            
+        # opencv has origin on top-left corner
+        box_polygon_mask = np.rot90(box_polygon_mask)[::-1]
+        return box_polygon_mask > 0
+    @staticmethod
+    def _query_map_objects(self, map_api:AbstractMap, 
+                        ego_pose:StateSE2, 
+                        layers:List[SemanticMapLayer]
+                        )->List[MapObject]:
+        """Queries map objects
+        :param map_api: map interface of nuPlan
+        :param ego_pose: ego pose in global frame
+        :param layers: map layers
+        :return: list of map objects"""
+        # query map api with interesting layers
+        map_object_dict = map_api.get_proximal_map_objects(point=ego_pose.point, radius=self, layers=layers)
+        map_objects: List[MapObject] = []
+        for layer in layers:
+            map_objects += map_object_dict[layer]
+        return map_objects
+    @staticmethod
+    def _geometry_local_coords(geometry: Any, 
+                               origin: StateSE2)->Any:
+        """Transform shapely geometry in local coordinates of origin.
+        :param geometry: shapely geometry
+        :param origin: pose dataclass
+        :return: shapely geometry"""
+        # Compute the affine transformation parameters for rotation and translation
+        a = np.cos(origin.heading)
+        b = np.sin(origin.heading)
+        d = -np.sin(origin.heading)
+        e = np.cos(origin.heading)
+        xoff = -origin.x
+        yoff = -origin.y
+        # apply the affine transformation and rotation to the geometry
+        translated_geometry = affinity.affine_transform(geometry, [1, 0, 0, 1, xoff, yoff])
+        rotated_geometry = affinity.affine_transform(translated_geometry, [a, b, d, e, 0, 0])
+        return rotated_geometry
+    def _coords_to_pixel(self, coords):
+        """Transform local coordinates to pixel indices in the BEV map
+        coords: local coordinates as numpy array; Returns: pixel indices as numpy array
+        return: pixel indices as numpy array"""
+        pixel_center = np.array([[0, self._config.bev_pixel_width/2.0]])
+        coords_idcs = (coords / self._config.bev_pixel_size) + pixel_center
+        return coords_idcs.astype(np.int32)
         
 
-            
-
-
-
-
-
+class BoundingBox2DIndex(IntEnum):
+    """Intenum for bounding boxes in Transfuser"""      
+    _X = 0
+    _Y = 1
+    _HEADING = 2
+    _LENGTH = 3
+    _WIDTH = 4
+    @classmethod
+    def size(cls):
+        valid_attributes = [
+            attribute
+            for attribute in dir(cls)
+            if attribute.startswith("_") and not attribute.startswith("__") and not callable(getattr(cls, attribute))
+        ]
+        return len(valid_attributes)
+    @classmethod
+    @property
+    def X(cls):
+        return cls._X
+    @classmethod
+    @property
+    def Y(cls):
+        return cls._Y
+    @classmethod
+    @property
+    def HEADING(cls):
+        return cls._HEADING
+    @classmethod
+    @property
+    def LENGTH(cls):
+        return cls._LENGTH
+    @classmethod
+    @property
+    def WIDTH(cls):
+        return cls._WIDTH
+    @classmethod
+    @property
+    def POINT(cls):
+        # assumes X, Y have subsequent indices
+        return slice(cls._X, cls._Y + 1)
+    @classmethod
+    @property
+    def STATE_SE2(cls):
+        # assumes X, Y, HEADING have subsequent indices
+        return slice(cls._X, cls._HEADING + 1)

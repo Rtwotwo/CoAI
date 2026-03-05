@@ -10,30 +10,6 @@ from torch import nn
 import torch.nn.functional as F
 
 
-ACTIVATION_CONFIGS = {'Swish': ' 深度学习通用、Transformer、图像分类 ',
-                      'Mish': ' 计算机视觉、目标检测、分类任务，提升模型泛化性 ',
-                      'ReLU6': ' 移动端模型、量化网络、MobileNet 系列 ',
-                      'HardSwish': ' 移动端轻量化模型、MobileNetV3',
-                      'HardMish': ' 轻量化网络、边缘设备部署，兼顾性能与效率 ',
-                      'Softplus': ' 平滑版 ReLU、避免梯度消失、概率模型 ',
-                      'Softsign': ' 语音识别、小范围输入场景，梯度更平缓 ',
-                      'Tanhshrink': ' 特征压缩、减少冗余信息、深度学习通用 ',
-                      'Hardtanh': ' 梯度稳定、量化网络、限制输出范围场景 ',
-                      'Selu': ' 自归一化神经网络、无需 BatchNorm、深度网络训练 ',
-                      'Celu': 'Selu 改进、更灵活的负区控制、图像分类 ',
-                      'ReluL2': ' 正则化约束、减少过拟合、图像检索 ',
-                      'GLU': 'Transformer 架构、语言模型、GPT 系列 ',
-                      'SwishGLU': ' 大语言模型、LLaMA 架构、提升特征表达 ',
-                      'Gated TanH': ' 循环神经网络、RNN/LSTM、序列建模 ',
-                      'Maxout': ' 分类任务、避免梯度消失、深度网络 ',
-                      'Softmax2D': ' 图像分割、像素级分类、语义分割任务 ',
-                      'LogSoftmax': ' 分类任务、负对数似然损失、数值稳定 ',
-                      'Threshold': ' 二值化特征、稀疏编码、特定图像处理 ',
-                      'PReLU': ' 图像分类、人脸识别、自适应负斜率学习 ',
-                      'RReLU': ' 图像分类、防止过拟合、随机负斜率增强鲁棒性 ',
-                      'Softmin': ' 相似度计算、排序任务、最小化目标场景 '}
-
-
 class Tanh(nn.Module):
     """计算公式: tanh(x) = (e^x - e^{-x}) / (e^x + e^{-x})
     use_native(bool):是否使用PyTorch原生实现"""
