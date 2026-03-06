@@ -66,8 +66,12 @@ class TransfuserModel(nn.Module):
             batch_first=True,)
         # Transformer decoder, agent head, and trajectory head
         self._tf_decoder = nn.TransformerDecoder(tf_decoder_layer, config.tf_num_layers)
-        self._agent_head = AgentHead()
-        self._trajectory_head = TrajectoryHead()
+        self._agent_head = AgentHead(num_agents=config.num_bounding_boxes,
+                                     d_ffn=config.tf_d_ffn,
+                                     d_model=config.tf_d_model,)
+        self._trajectory_head = TrajectoryHead(num_poses=trajectory_sampling.num_poses,
+                                               d_ffn=config.tf_d_ffn,
+                                              d_model=config.tf_d_model,)
     def forward(self, features: Dict[str, torch.Tensor]
                 )->Dict[str, torch.Tensor]:
         """Transfuser model forward pass module"""
@@ -125,4 +129,42 @@ class AgentHead(nn.Module):
             nn.Linear(self._d_model, self._d_ffn),
             nn.ReLU(),
             nn.Linear(self._d_ffn, BoundingBox2DIndex.size()),)
+        self._mlp_label = nn.Sequential(
+            nn.Linear(self._d_model, self._d_ffn),
+            nn.ReLU(),
+            nn.Linear(self._d_ffn, BoundingBox2DIndex.size()),)
+    def forward(self, agents_queries: torch.Tensor
+                )->Dict[str, torch.Tensor]:
+        """Torch module forward pass"""
+        agent_states = self._mlp_states(agents_queries)
+        agent_states[..., BoundingBox2DIndex.POINT] = agent_states[..., BoundingBox2DIndex.POINT].tanh() * 32
+        agent_states[..., BoundingBox2DIndex.HEADING] = agent_states[..., BoundingBox2DIndex.HEADING].tanh() * np.pi
+        agent_labels = self._mlp_label(agents_queries)
+        return {'agent_states': agent_states, 'agent_labels': agent_labels}
+
+    
+class TrajectoryHead(nn.Module):
+    """Trajectory head for Transfuser model: Trajectory prediction Head"""
+    def __init__(self, num_poses: int,
+                 d_ffn: int,
+                 d_model: int):
+        """Initialize the trajectory head
+        num_poses: number of poses to predict, (x, y, theta)
+        d_ffn: feed-forward network dimension
+        d_model: input features dimension"""
+        super(TrajectoryHead, self).__init__()
+        self._num_poses = num_poses
+        self._d_ffn = d_ffn
+        self._d_model = d_model
+        self._mlp = nn.Sequential(
+            nn.Linear(self.d_model,  self._d_ffn),
+            nn.ReLU(),
+            nn.Linear(self._d_ffn, self._num_poses * BoundingBox2DIndex.size()),)
+    def forward(self, object_queries: torch.Tensor):
+        """Torch module forward pass"""
+        poses = self._mlp(object_queries).reshape(-1, self._num_poses, BoundingBox2DIndex.size())
+        poses[..., StateSE2Index.HEADING] = poses[..., StateSE2Index.HEADING].tanh() * np.pi
+        return {'trajectory': poses}
+
+
         
