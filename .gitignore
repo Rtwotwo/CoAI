@@ -1,11 +1,3 @@
-# ignore papers floder
-agc/papers/
-nlp/papers/
-vla/papers/
-vlm/papers/
-base/papers/
-3d/papers/
-
 # ignore clones floder
 agc/clones/
 nlp/clones/

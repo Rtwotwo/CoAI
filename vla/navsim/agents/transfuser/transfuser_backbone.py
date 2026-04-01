@@ -204,3 +204,19 @@ class TransformerDecoderWithAttention(nn.Module):
     """Transformer Decoder with attention weights returned"""
     def __init__(self, layers, num_layers, norm=None,):
         super().__init__()
+        self.num_layers = num_layers
+        self.norm = norm
+        self.layers = nn.ModuleList(
+            copy.deepcopy(layers) for _ in range(num_layers))
+    def forward(self, queries, memory):
+        output = queries
+        attentions = []
+        for mod in self.layers:
+            output, attention = mod(output, memory)
+            attentions.append(attention)
+        if self.norm is not None:
+            output = self.norm(output)
+        # return average attention over all layers
+        avg_attention = torch.mean(torch.stack(attentions), dim=0)
+        return output, avg_attention
+        
